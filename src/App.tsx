@@ -2,7 +2,8 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { S } from './strings';
 import { AuthProvider } from './lib/auth';
 import { TeacherOnly } from './components/TeacherOnly';
-import { TopBar } from './components/TopBar';
+import { MyQuizzes } from './teacher/MyQuizzes';
+import { QuizEditor } from './teacher/QuizEditor';
 
 /** Placeholder until the screen for a route is built. */
 function Soon({ name }: { name: string }) {
@@ -19,15 +20,6 @@ function Soon({ name }: { name: string }) {
   );
 }
 
-function TeacherShell({ name }: { name: string }) {
-  return (
-    <div className="page">
-      <TopBar />
-      <Soon name={name} />
-    </div>
-  );
-}
-
 export function App() {
   return (
     <AuthProvider>
@@ -38,7 +30,7 @@ export function App() {
           path="/teacher"
           element={
             <TeacherOnly>
-              <TeacherShell name={S.quizzes.heading} />
+              <MyQuizzes />
             </TeacherOnly>
           }
         />
@@ -46,7 +38,7 @@ export function App() {
           path="/teacher/quiz/:quizId"
           element={
             <TeacherOnly>
-              <TeacherShell name="Quiz editor" />
+              <QuizEditor />
             </TeacherOnly>
           }
         />
