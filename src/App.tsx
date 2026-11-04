@@ -1,5 +1,8 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { S } from './strings';
+import { AuthProvider } from './lib/auth';
+import { TeacherOnly } from './components/TeacherOnly';
+import { TopBar } from './components/TopBar';
 
 /** Placeholder until the screen for a route is built. */
 function Soon({ name }: { name: string }) {
@@ -16,15 +19,47 @@ function Soon({ name }: { name: string }) {
   );
 }
 
+function TeacherShell({ name }: { name: string }) {
+  return (
+    <div className="page">
+      <TopBar />
+      <Soon name={name} />
+    </div>
+  );
+}
+
 export function App() {
   return (
-    <Routes>
-      <Route path="/" element={<Soon name="Join" />} />
-      <Route path="/play/:code" element={<Soon name="Play" />} />
-      <Route path="/teacher" element={<Soon name="Teacher" />} />
-      <Route path="/teacher/quiz/:quizId" element={<Soon name="Quiz editor" />} />
-      <Route path="/teacher/host/:quizId" element={<Soon name="Host" />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <AuthProvider>
+      <Routes>
+        <Route path="/" element={<Soon name="Join" />} />
+        <Route path="/play/:code" element={<Soon name="Play" />} />
+        <Route
+          path="/teacher"
+          element={
+            <TeacherOnly>
+              <TeacherShell name={S.quizzes.heading} />
+            </TeacherOnly>
+          }
+        />
+        <Route
+          path="/teacher/quiz/:quizId"
+          element={
+            <TeacherOnly>
+              <TeacherShell name="Quiz editor" />
+            </TeacherOnly>
+          }
+        />
+        <Route
+          path="/teacher/host/:quizId"
+          element={
+            <TeacherOnly>
+              <Soon name="Host" />
+            </TeacherOnly>
+          }
+        />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </AuthProvider>
   );
 }
