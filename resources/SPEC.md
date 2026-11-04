@@ -185,7 +185,7 @@ Only two things are stored: quizzes and questions (plus the allowed-teachers lis
 
 ### 5.1 SQL
 
-Run this as one migration in the Supabase SQL editor.
+Run this as one migration in the Supabase SQL editor. It assumes the Supabase project was created with **Automatically expose new tables** turned off (recommended), which is why it grants table access explicitly.
 
 ```sql
 -- ===== Allowed teachers (managed by hand in the Supabase dashboard) =====
@@ -246,6 +246,10 @@ create policy quizzes_update_own on public.quizzes for update to authenticated
 create policy quizzes_delete_own on public.quizzes for delete to authenticated
   using (owner_id = auth.uid() and public.is_allowed_teacher());
 
+-- The project is created with "Automatically expose new tables" OFF, so access is granted explicitly.
+-- Row-level security above still decides which rows each teacher can see.
+grant select, insert, update, delete on public.quizzes to authenticated;
+
 -- ===== Questions =====
 create table public.questions (
   id                 uuid primary key default gen_random_uuid(),
@@ -286,6 +290,8 @@ create policy questions_update_own on public.questions for update to authenticat
 create policy questions_delete_own on public.questions for delete to authenticated
   using (public.is_allowed_teacher() and exists (
     select 1 from public.quizzes q where q.id = questions.quiz_id and q.owner_id = auth.uid()));
+
+grant select, insert, update, delete on public.questions to authenticated;
 ```
 
 Ordering: always `order by position, created_at`. There is deliberately no unique constraint on `(quiz_id, position)`; the app rewrites positions 0..n-1 for the whole quiz after any reorder, add, duplicate or delete.
@@ -500,7 +506,7 @@ Steps marked `[Manual Setup]` need a person in a website or dashboard; a coding 
 ### Phase 0: accounts and project
 
 1. `[Manual Setup]` Create a GitHub repository for the project.
-2. `[Manual Setup]` Create a Supabase project (free plan, region Singapore). Note the project URL and the anon (public) key from Project Settings → API.
+2. `[Manual Setup]` Create a Supabase project (free plan, region Singapore). In the project's security options, leave **Enable Data API** and **Enable automatic RLS** ticked, and leave **Automatically expose new tables** unticked. Note the project URL and the anon (public) key from Project Settings → API.
 3. Scaffold a Vite + React + TypeScript app with React Router and Vitest. Add `@supabase/supabase-js`, `@dnd-kit/core`, `@dnd-kit/sortable`, `highlight.js`, and a schema library (Zod). Commit.
 4. Create `.env.local` (git-ignored) with `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`, and `.env.example`. `[Manual Setup]` Paste the real values from step 2.
 5. Create the folder structure: `src/lib` (supabase client, game logic), `src/teacher`, `src/student`, `src/host`, `src/components`, `src/strings.ts` (all UI text in one file).
@@ -601,4 +607,4 @@ Steps marked `[Manual Setup]` need a person in a website or dashboard; a coding 
 
 **Small decisions the builder should make as written (change only if Ben says so):** autosave one second after typing stops; ties share a rank (1, 2, 2, 4); 10-second disconnect grace; 30-player safety cap; teachers find their area by bookmarking `/teacher`.
 
-**Security reminders:** never put the Supabase service role key in the frontend. Only the anon key goes in `VITE_` variables. Keep email confirmation on. Do not add UI for changing a teacher's email. All access control for teachers lives in the row-level security policies in 5.1, not in the React code.
+**Security reminders:** never put the Supabase service role key in the frontend. Only the anon key goes in `VITE_` variables. Keep email confirmation on. Do not add UI for changing a teacher's email. All access control for teachers lives in the row-level security policies in 5.1, not in the React code. If you see "permission denied for table" errors, check that the `grant` lines at the end of each table's section in 5.1 were run.

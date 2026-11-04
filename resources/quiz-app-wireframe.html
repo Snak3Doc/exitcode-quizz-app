@@ -1,0 +1,582 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Quiz App Wireframe</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout concept: one labeled frame per screen, grouped by who sees it (teacher, projector, student). Grayscale on purpose: structure only. */
+:root {
+  --bg: #f4f4f3;
+  --ink: #1c1c1c;
+  --muted: #666666;
+  --line: #8a8a8a;
+  --box: #ffffff;
+  --fill: #e6e6e4;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161616; --ink: #ececec; --muted: #a2a2a2; --line: #7a7a7a; --box: #1e1e1e; --fill: #2b2b2b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161616; --ink: #ececec; --muted: #a2a2a2; --line: #7a7a7a; --box: #1e1e1e; --fill: #2b2b2b;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.45;
+  padding-block: 24px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+main { max-width: 1040px; margin: 0 auto; display: grid; gap: 20px; }
+h1 { font-size: 26px; margin: 0; text-wrap: balance; }
+h2 { font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin: 28px 0 0; padding-bottom: 6px; border-bottom: 1.5px solid var(--line); }
+h3 { font-size: 16px; margin: 0; }
+p { margin: 0; max-width: 70ch; }
+.lede { color: var(--muted); }
+nav { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; }
+nav a { color: var(--ink); }
+a:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+/* Screen frame */
+.screen { border: 2px solid var(--line); border-radius: 4px; background: var(--bg); min-width: 0; }
+.screen-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 8px 12px; border-bottom: 2px solid var(--line); background: var(--fill); }
+.screen-head .who { color: var(--muted); font-size: 12px; }
+.screen-body { padding: 14px; display: grid; gap: 12px; min-width: 0; }
+.screen-body.narrow { max-width: 560px; margin: 0 auto; width: 100%; }
+
+/* Wireframe parts */
+.box { border: 1.5px dashed var(--line); background: var(--box); padding: 10px; display: grid; gap: 8px; min-width: 0; align-content: start; }
+.lbl { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; }
+.row.between { justify-content: space-between; }
+.grow { flex: 1 1 160px; min-width: 0; }
+.btn { display: inline-block; border: 1.5px solid var(--ink); padding: 5px 12px; border-radius: 3px; font-size: 13px; background: var(--box); white-space: nowrap; }
+.btn.solid { background: var(--ink); color: var(--bg); }
+.btn.off { border-style: dashed; color: var(--muted); border-color: var(--line); }
+.btn.big { padding: 10px 22px; font-size: 15px; }
+.field { border: 1.5px solid var(--line); padding: 5px 8px; min-height: 30px; color: var(--muted); background: var(--box); border-radius: 2px; min-width: 0; overflow-wrap: anywhere; }
+.field.tall { min-height: 64px; }
+.field.sel::after { content: "  ▾"; }
+.tag { display: inline-block; border: 1.5px solid var(--line); border-radius: 10px; padding: 0 8px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.chip { border: 1.5px solid var(--line); border-radius: 3px; padding: 4px 10px; background: var(--box); }
+.chip small { color: var(--muted); display: block; font-size: 11px; }
+.code { border: 1.5px solid var(--line); background: var(--fill); font-family: var(--mono); font-size: 13px; padding: 8px 10px; white-space: pre; overflow-x: auto; margin: 0; border-radius: 2px; }
+.code-head { font-size: 11px; color: var(--muted); font-family: var(--font); }
+.note { font-size: 12px; color: var(--muted); font-style: italic; max-width: 80ch; }
+.opt { display: flex; gap: 8px; align-items: flex-start; border: 1.5px solid var(--line); padding: 6px 8px; background: var(--box); border-radius: 2px; min-width: 0; }
+.opt > :last-child { flex: 1 1 auto; min-width: 0; }
+.mark { font-family: var(--mono); color: var(--muted); flex: none; }
+.right { font-weight: 700; border-style: solid; border-color: var(--ink); }
+.cols { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.split { display: grid; gap: 12px; grid-template-columns: minmax(170px, 1fr) minmax(0, 2.5fr); }
+.split.even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+@media (max-width: 640px) { .split, .split.even { grid-template-columns: minmax(0, 1fr); } }
+.big-code { font-family: var(--mono); font-size: clamp(34px, 8vw, 64px); letter-spacing: 0.18em; text-align: center; border: 2px solid var(--ink); padding: 8px; background: var(--box); }
+.center { text-align: center; }
+.mermaid-wrap { overflow-x: auto; border: 1.5px dashed var(--line); background: var(--box); padding: 10px; }
+.title-sm { font-size: 15px; font-weight: 600; }
+ul.plain { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
+</style>
+
+<main>
+  <header style="display:grid;gap:8px">
+    <h1>Quiz App Wireframe</h1>
+    <p class="lede">Structure only. Dashed boxes are regions, solid boxes are things you click or type into, and the names, codes and questions are examples. Colours and fonts come later in Look &amp; Feel.</p>
+    <nav aria-label="Screens">
+      <a href="#flow">How screens connect</a>
+      <a href="#t-signin">Sign in</a>
+      <a href="#t-quizzes">My quizzes</a>
+      <a href="#t-editor">Quiz editor</a>
+      <a href="#t-answers">Answer areas</a>
+      <a href="#p-lobby">Lobby</a>
+      <a href="#p-question">Question</a>
+      <a href="#p-results">Results</a>
+      <a href="#p-final">Final</a>
+      <a href="#s-join">Student join</a>
+      <a href="#s-question">Student question</a>
+      <a href="#s-other">Student states</a>
+    </nav>
+  </header>
+
+  <h2 id="flow">How screens connect</h2>
+  <div class="cols">
+    <div class="mermaid-wrap">
+      <p class="lbl">Teacher and projector</p>
+      <pre class="mermaid">
+flowchart TD
+  A[Sign in] --> B[My quizzes]
+  B <--> C[Quiz editor]
+  B -->|Host| D[Lobby]
+  D -->|Start| E[Question]
+  E -->|Everyone submitted, timer ended, or Show results| F[Results and leaderboard]
+  F -->|Next question| E
+  F -->|Last question| G[Final leaderboard]
+  G --> B
+      </pre>
+    </div>
+    <div class="mermaid-wrap">
+      <p class="lbl">Student</p>
+      <pre class="mermaid">
+flowchart TD
+  S1[Join] --> S2[Waiting room]
+  S2 -->|Host starts| S3[Question]
+  S3 -->|Submit| S3b[Answer locked]
+  S3b --> S4[Result]
+  S4 -->|Host clicks Next| S3
+  S4 -->|Last question| S5[Final rank]
+      </pre>
+    </div>
+  </div>
+
+  <h2>Teacher screens (your own laptop)</h2>
+
+  <section class="screen" id="t-signin">
+    <div class="screen-head"><h3>Sign in</h3><span class="who">Teacher · public link, first page</span></div>
+    <div class="screen-body narrow">
+      <div class="box"><span class="lbl">Header</span><div class="title-sm center">ExitCode</div></div>
+      <div class="box">
+        <span class="lbl">Sign-in card</span>
+        <div class="btn center">Continue with Google</div>
+        <div class="center note">or</div>
+        <div class="field">Email</div>
+        <div class="field">Password</div>
+        <div class="row"><span class="btn solid">Sign in</span><span class="btn off">Create account with email</span></div>
+        <p class="note">After email sign-up: "Check your inbox to confirm your email." Sign-in is blocked until it is confirmed.</p>
+      </div>
+      <div class="box">
+        <span class="lbl">Message area (only shown after a failed sign-in)</span>
+        <div class="field">"This email isn't on the approved teacher list."</div>
+      </div>
+      <p class="note">Students never see this screen. They go straight to the Join screen.</p>
+    </div>
+  </section>
+
+  <section class="screen" id="t-quizzes">
+    <div class="screen-head"><h3>My quizzes</h3><span class="who">Teacher · home after sign-in</span></div>
+    <div class="screen-body">
+      <div class="box">
+        <span class="lbl">Top bar</span>
+        <div class="row between"><span class="title-sm">ExitCode</span><span class="row"><span class="field">teacher@email.com</span><span class="btn">Sign out</span></span></div>
+      </div>
+      <div class="box">
+        <span class="lbl">Toolbar</span>
+        <div class="row"><span class="btn solid">+ New quiz</span><span class="btn">Import quiz file</span></div>
+      </div>
+      <div class="box">
+        <span class="lbl">Quiz list (only this teacher's quizzes)</span>
+        <div class="opt"><div class="row between" style="width:100%">
+          <span class="grow"><b>Python basics: loops</b><br><small class="note">10 questions · edited today</small></span>
+          <span class="row"><span class="btn solid">Host</span><span class="btn">Edit</span><span class="btn">Duplicate</span><span class="btn">Export</span><span class="btn">Delete</span></span>
+        </div></div>
+        <div class="opt"><div class="row between" style="width:100%">
+          <span class="grow"><b>HTML tags quick check</b><br><small class="note">6 questions · edited last week</small></span>
+          <span class="row"><span class="btn solid">Host</span><span class="btn">Edit</span><span class="btn">Duplicate</span><span class="btn">Export</span><span class="btn">Delete</span></span>
+        </div></div>
+        <p class="note">Delete asks "Delete this quiz? This can't be undone." with Cancel and Delete buttons right there in the row, not in a pop-up.</p>
+      </div>
+      <div class="box">
+        <span class="lbl">Empty state (when there are no quizzes yet)</span>
+        <div class="field">No quizzes yet. Click "+ New quiz" or import a quiz file.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="screen" id="t-editor">
+    <div class="screen-head"><h3>Quiz editor</h3><span class="who">Teacher · opens from New quiz or Edit</span></div>
+    <div class="screen-body">
+      <div class="box">
+        <span class="lbl">Top bar</span>
+        <div class="row between">
+          <span class="row"><span class="btn">← My quizzes</span><span class="field grow" style="min-width:200px">Quiz title</span></span>
+          <span class="row"><span class="tag">Saved</span><span class="btn solid">Host this quiz</span></span>
+        </div>
+      </div>
+      <div class="split">
+        <div class="box">
+          <span class="lbl">Question list (drag to reorder)</span>
+          <div class="opt"><span class="mark">⋮⋮</span><span>1. What does this print? <span class="tag">Multiple choice</span></span><span class="mark">⧉ ✕</span></div>
+          <div class="opt right"><span class="mark">⋮⋮</span><span>2. Which are valid names? <span class="tag">Multi answer</span></span><span class="mark">⧉ ✕</span></div>
+          <div class="opt"><span class="mark">⋮⋮</span><span>3. Order the lines <span class="tag">Order lines</span></span><span class="mark">⧉ ✕</span></div>
+          <span class="btn">+ Add question</span>
+          <p class="note">⧉ duplicates the question, ✕ deletes it. The selected question (bold) is the one open on the right.</p>
+        </div>
+        <div class="box">
+          <span class="lbl">Question form</span>
+          <div class="row"><span class="field sel grow">Question type</span></div>
+          <div class="field tall">Question text, for example: "What does this code print?"</div>
+          <div class="box">
+            <span class="lbl">Optional code block (one per question)</span>
+            <div class="row"><span class="field sel">Language: Python</span><span class="btn off">Remove code block</span></div>
+            <pre class="code">for i in range(3):
+    print(i * 2)</pre>
+            <p class="note">The editor shows the code with syntax highlighting as you type. Languages: Python, JavaScript, HTML, CSS, Plain text.</p>
+          </div>
+          <div class="box">
+            <span class="lbl">Answer area (changes with the question type, see next section)</span>
+            <div class="field">Answer options go here</div>
+          </div>
+          <div class="box">
+            <span class="lbl">Timing</span>
+            <div class="row"><span class="opt"><span class="mark">( )</span>Wait for everyone</span><span class="opt"><span class="mark">(•)</span>Timed</span></div>
+            <div class="row"><span class="field">30</span><span>seconds (5 to 300)</span><span class="btn">10</span><span class="btn">20</span><span class="btn">30</span><span class="btn">60</span><span class="btn">120</span></div>
+            <p class="note">The seconds box and quick-pick buttons only show when Timed is selected. Speed bonus applies to timed questions only.</p>
+          </div>
+          <div class="box">
+            <span class="lbl">Explanation (optional, shown on the results screen)</span>
+            <div class="field tall">"range(3) gives 0, 1, 2, so i * 2 gives 0, 2, 4."</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="screen" id="t-answers">
+    <div class="screen-head"><h3>Editor answer areas, one per question type</h3><span class="who">Teacher · replaces the "Answer area" box above</span></div>
+    <div class="screen-body">
+      <div class="cols">
+        <div class="box">
+          <span class="lbl">Multiple choice, one answer</span>
+          <div class="opt right"><span class="mark">(•)</span><div class="grow"><div class="row"><span class="field grow">Option A text</span><span class="field sel">Text</span></div></div><span class="mark">✕</span></div>
+          <div class="opt"><span class="mark">( )</span><div class="grow"><div class="row"><span class="field grow">Option B text</span><span class="field sel">Text</span></div></div><span class="mark">✕</span></div>
+          <div class="opt"><span class="mark">( )</span><div class="grow"><div class="row"><span class="field sel">Code</span><span class="field sel">Python</span></div><pre class="code">len(items)</pre></div><span class="mark">✕</span></div>
+          <span class="btn">+ Add option</span>
+          <p class="note">The filled dot marks the correct answer. Each option is either Text or a Code block with its own language.</p>
+        </div>
+        <div class="box">
+          <span class="lbl">Multiple choice, several answers</span>
+          <div class="opt right"><span class="mark">[x]</span><span class="field grow">Option A text</span><span class="mark">✕</span></div>
+          <div class="opt"><span class="mark">[ ]</span><span class="field grow">Option B text</span><span class="mark">✕</span></div>
+          <div class="opt right"><span class="mark">[x]</span><span class="field grow">Option C text</span><span class="mark">✕</span></div>
+          <span class="btn">+ Add option</span>
+          <p class="note">Same option rows as above, with tick boxes for every correct option. Each option can also be Text or Code.</p>
+        </div>
+        <div class="box">
+          <span class="lbl">True / False</span>
+          <div class="opt right"><span class="mark">(•)</span>True</div>
+          <div class="opt"><span class="mark">( )</span>False</div>
+          <p class="note">The two options are fixed. Pick which one is correct.</p>
+        </div>
+        <div class="box">
+          <span class="lbl">Short text answer</span>
+          <div class="row"><span class="field grow">Accepted answer: len</span><span class="mark">✕</span></div>
+          <div class="row"><span class="field grow">Accepted answer: len()</span><span class="mark">✕</span></div>
+          <span class="btn">+ Add accepted answer</span>
+          <div class="opt"><span class="mark">[ ]</span>Case-sensitive</div>
+          <p class="note">Marking ignores capital letters and extra spaces unless Case-sensitive is ticked.</p>
+        </div>
+        <div class="box">
+          <span class="lbl">Fill in the blank (code)</span>
+          <div class="row"><span class="field sel">Language: Python</span></div>
+          <pre class="code">for i in {{1}}(3):
+    {{2}}(i)</pre>
+          <span class="lbl">Word bank</span>
+          <div class="row"><span class="chip">range ✕</span><span class="chip">print ✕</span><span class="chip">len ✕</span><span class="btn">+ Add word</span></div>
+          <span class="lbl">Correct word for each blank</span>
+          <div class="row"><span>Blank 1</span><span class="field sel">range</span></div>
+          <div class="row"><span>Blank 2</span><span class="field sel">print</span></div>
+          <p class="note">Type {{1}}, {{2}} and so on in the snippet to mark the blanks. Students pick a word from the bank for each blank.</p>
+        </div>
+        <div class="box">
+          <span class="lbl">Order the lines</span>
+          <div class="row"><span class="field sel">Language: Python</span></div>
+          <div class="opt"><span class="mark">⋮⋮</span><span class="field grow code-head">def greet(name):</span><span class="mark">✕</span></div>
+          <div class="opt"><span class="mark">⋮⋮</span><span class="field grow code-head">    return "Hi " + name</span><span class="mark">✕</span></div>
+          <div class="opt"><span class="mark">⋮⋮</span><span class="field grow code-head">print(greet("Sam"))</span><span class="mark">✕</span></div>
+          <span class="btn">+ Add line</span>
+          <p class="note">Lines are listed in the correct order. Students see them shuffled.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <h2>Classroom screen (projector, your laptop connected to it)</h2>
+
+  <section class="screen" id="p-lobby">
+    <div class="screen-head"><h3>Lobby</h3><span class="who">Projector · after clicking Host</span></div>
+    <div class="screen-body">
+      <div class="box center">
+        <span class="lbl">Join instructions</span>
+        <div>Go to <b>[site address]</b> and enter this code</div>
+        <div class="big-code">K7M2QX</div>
+        <div class="note">Quiz: Python basics: loops · 10 questions</div>
+      </div>
+      <div class="box">
+        <span class="lbl">Players joined (5)</span>
+        <div class="row"><span class="chip">Sam</span><span class="chip">Linh</span><span class="chip">Minh</span><span class="chip">Mai</span><span class="chip">Jake</span></div>
+        <p class="note">Names appear as students join. Joining is closed once the game starts.</p>
+      </div>
+      <div class="row"><span class="btn solid big">Start game</span><span class="btn">Cancel game</span><span class="note">Start is disabled until at least one player has joined.</span></div>
+    </div>
+  </section>
+
+  <section class="screen" id="p-question">
+    <div class="screen-head"><h3>Question</h3><span class="who">Projector · shown while students answer</span></div>
+    <div class="screen-body">
+      <div class="box">
+        <span class="lbl">Top strip</span>
+        <div class="row between"><span>Question 3 of 10</span><span class="tag">Multiple choice</span><span class="chip">Timer 0:24<small>only on timed questions</small></span><span>4 of 5 submitted</span></div>
+      </div>
+      <div class="box">
+        <span class="lbl">Question</span>
+        <div class="title-sm">What does this code print?</div>
+        <pre class="code">for i in range(3):
+    print(i * 2)</pre>
+      </div>
+      <div class="box">
+        <span class="lbl">Answer options (lettered, same order as on student screens)</span>
+        <div class="cols">
+          <div class="opt"><span class="mark">A</span>0 2 4</div>
+          <div class="opt"><span class="mark">B</span>2 4 6</div>
+          <div class="opt"><span class="mark">C</span>0 1 2</div>
+          <div class="opt"><span class="mark">D</span>0 2 4 6</div>
+        </div>
+        <p class="note">Other types show their content here instead: True/False shows the two options, Short text shows "Type your answer", Fill in the blank shows the snippet with empty blanks and the word bank, Order the lines shows the shuffled lines. Correct answers are never shown on this screen.</p>
+      </div>
+      <div class="box">
+        <span class="lbl">Who has answered</span>
+        <div class="row"><span class="chip">Sam<small>✓ submitted</small></span><span class="chip">Linh<small>✓ submitted</small></span><span class="chip">Minh<small>waiting…</small></span><span class="chip">Mai<small>✓ submitted</small></span><span class="chip">Jake<small>✓ submitted</small></span></div>
+      </div>
+      <div class="row"><span class="btn big">Show results now</span><span class="note">Teacher control. Moves on straight away even if some students haven't answered.</span></div>
+    </div>
+  </section>
+
+  <section class="screen" id="p-results">
+    <div class="screen-head"><h3>Results and leaderboard</h3><span class="who">Projector · after every question</span></div>
+    <div class="screen-body">
+      <div class="row between"><span>Question 3 of 10 · Results</span><span class="tag">Multiple choice</span></div>
+      <div class="split even">
+        <div class="box">
+          <span class="lbl">Correct answer</span>
+          <div class="opt right"><span class="mark">A</span>0 2 4</div>
+          <div class="box">
+            <span class="lbl">Explanation (only if the teacher wrote one)</span>
+            <div>range(3) gives 0, 1, 2, so i * 2 gives 0, 2, 4.</div>
+          </div>
+          <p class="note">For multi-answer, fill-in-the-blank and order questions, this box shows the full correct set, snippet or line order.</p>
+        </div>
+        <div class="box">
+          <span class="lbl">Leaderboard (ranked by total score)</span>
+          <div class="opt"><span class="mark">1</span><span class="grow">Linh</span><span>✓ +1480</span><span>4120</span></div>
+          <div class="opt"><span class="mark">2</span><span class="grow">Sam</span><span>✓ +1350</span><span>3970</span></div>
+          <div class="opt"><span class="mark">3</span><span class="grow">Mai</span><span>½ +500</span><span>3200</span></div>
+          <div class="opt"><span class="mark">4</span><span class="grow">Jake</span><span>✗ +0</span><span>2800</span></div>
+          <div class="opt"><span class="mark">5</span><span class="grow">Minh</span><span>– no answer</span><span>2100</span></div>
+          <p class="note">Columns: rank, name, result for this question and points earned, total score. ½ means partial credit.</p>
+        </div>
+      </div>
+      <div class="row"><span class="btn solid big">Next question</span><span class="note">On the last question this button says "Finish game".</span></div>
+    </div>
+  </section>
+
+  <section class="screen" id="p-final">
+    <div class="screen-head"><h3>Final leaderboard</h3><span class="who">Projector · after the last question</span></div>
+    <div class="screen-body">
+      <div class="box">
+        <span class="lbl">Top three</span>
+        <div class="cols">
+          <div class="opt"><span class="mark">2</span>Sam · 8970</div>
+          <div class="opt right"><span class="mark">1</span>Linh · 9420</div>
+          <div class="opt"><span class="mark">3</span>Mai · 8100</div>
+        </div>
+      </div>
+      <div class="box">
+        <span class="lbl">Everyone else</span>
+        <div class="opt"><span class="mark">4</span><span class="grow">Jake</span><span>7600</span></div>
+        <div class="opt"><span class="mark">5</span><span class="grow">Minh</span><span>6400</span></div>
+      </div>
+      <div class="row"><span class="btn solid big">Back to my quizzes</span><span class="note">Results are not saved. Hosting the quiz again creates a new game with a new code.</span></div>
+    </div>
+  </section>
+
+  <h2>Student screens (their own laptops)</h2>
+
+  <section class="screen" id="s-join">
+    <div class="screen-head"><h3>Join and waiting room</h3><span class="who">Student · opens from the public link</span></div>
+    <div class="screen-body">
+      <div class="cols">
+        <div class="box">
+          <span class="lbl">Join</span>
+          <div class="title-sm center">ExitCode</div>
+          <div class="field">Game code</div>
+          <div class="field">Your name</div>
+          <div class="btn solid center">Join game</div>
+          <span class="lbl">Error messages (one at a time, under the button)</span>
+          <ul class="plain note">
+            <li>"We can't find a game with that code."</li>
+            <li>"That name is taken. Pick another."</li>
+            <li>"This game has already started."</li>
+          </ul>
+        </div>
+        <div class="box">
+          <span class="lbl">Waiting room</span>
+          <div class="title-sm center">You're in, Sam</div>
+          <div class="center">Waiting for the teacher to start…</div>
+          <div class="row"><span class="chip">Sam</span><span class="chip">Linh</span><span class="chip">Minh</span></div>
+          <p class="note">The list of joined players is shown so students can see they are in the right game.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="screen" id="s-question">
+    <div class="screen-head"><h3>Question and answer locked</h3><span class="who">Student · while answering</span></div>
+    <div class="screen-body">
+      <div class="cols">
+        <div class="box">
+          <span class="lbl">Question screen</span>
+          <div class="row between"><span>Sam</span><span>Question 3 of 10</span><span class="chip">0:24</span></div>
+          <div class="title-sm">What does this code print?</div>
+          <pre class="code">for i in range(3):
+    print(i * 2)</pre>
+          <div class="opt"><span class="mark">( ) A</span>0 2 4</div>
+          <div class="opt"><span class="mark">( ) B</span>2 4 6</div>
+          <div class="opt"><span class="mark">( ) C</span>0 1 2</div>
+          <div class="opt"><span class="mark">( ) D</span>0 2 4 6</div>
+          <div class="btn solid center">Submit answer</div>
+          <p class="note">The timer is only shown on timed questions. Submit stays disabled until something is chosen.</p>
+        </div>
+        <div class="box">
+          <span class="lbl">After submitting</span>
+          <div class="row between"><span>Sam</span><span>Question 3 of 10</span></div>
+          <div class="title-sm center">Answer submitted</div>
+          <div class="center">Waiting for the others… (4 of 5)</div>
+          <p class="note">The answer can't be changed. The screen moves to the result when everyone has submitted, the timer ends, or the teacher clicks Show results now.</p>
+        </div>
+      </div>
+      <div class="box">
+        <span class="lbl">Answer area by question type (replaces the A to D options above)</span>
+        <div class="cols">
+          <div class="box"><span class="lbl">Multiple choice, one answer</span><span class="note">Radio buttons, as shown above. Options can be text or code blocks.</span></div>
+          <div class="box"><span class="lbl">Multiple choice, several answers</span><div class="opt"><span class="mark">[ ] A</span>Option text</div><div class="opt"><span class="mark">[ ] B</span>Option text</div><span class="note">Tick boxes. Tick all that apply.</span></div>
+          <div class="box"><span class="lbl">True / False</span><div class="row"><span class="btn big">True</span><span class="btn big">False</span></div></div>
+          <div class="box"><span class="lbl">Short text answer</span><div class="field">Type your answer</div></div>
+          <div class="box"><span class="lbl">Fill in the blank</span><pre class="code">for i in [ range ▾ ](3):
+    [ choose ▾ ](i)</pre><span class="note">Each blank is a dropdown listing the word bank.</span></div>
+          <div class="box"><span class="lbl">Order the lines</span><div class="opt"><span class="mark">⋮⋮</span><span class="code-head">print(greet("Sam"))</span></div><div class="opt"><span class="mark">⋮⋮</span><span class="code-head">def greet(name):</span></div><div class="opt"><span class="mark">⋮⋮</span><span class="code-head">    return "Hi " + name</span></div><span class="note">Drag lines into the right order.</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="screen" id="s-other">
+    <div class="screen-head"><h3>Result, final rank and error states</h3><span class="who">Student · after each question and at the end</span></div>
+    <div class="screen-body">
+      <div class="cols">
+        <div class="box">
+          <span class="lbl">Result after a question</span>
+          <div class="title-sm center">Correct!</div>
+          <div class="center">+1000 points · +350 speed bonus</div>
+          <div class="opt right"><span class="mark">A</span>0 2 4 <span class="note">correct answer</span></div>
+          <div class="box"><span class="lbl">Explanation (if provided)</span><div>range(3) gives 0, 1, 2, so i * 2 gives 0, 2, 4.</div></div>
+          <div class="row between"><span>Your rank: 2nd</span><span>Total: 3970</span></div>
+          <div class="center note">Waiting for the teacher to continue…</div>
+          <p class="note">The heading changes to "Partly correct", "Not quite" or "No answer" as needed.</p>
+        </div>
+        <div class="box">
+          <span class="lbl">Final screen</span>
+          <div class="title-sm center">Game over</div>
+          <div class="center">You finished 2nd with 8970 points</div>
+          <div class="btn center">Join another game</div>
+        </div>
+        <div class="box">
+          <span class="lbl">Disconnected (after a refresh or lost connection mid-game)</span>
+          <div class="title-sm center">You've left this game</div>
+          <div class="center">You can't rejoin a game that has started.</div>
+          <div class="btn center">Back to join screen</div>
+        </div>
+        <div class="box">
+          <span class="lbl">Teacher left</span>
+          <div class="title-sm center">The game has ended</div>
+          <div class="center">The teacher closed the game.</div>
+          <div class="btn center">Back to join screen</div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!--claude-mermaid-runtime-begin:3477-->
+<style>.mermaid-diagram{margin-block:4px}.mermaid-diagram svg{display:block;margin:0 auto;max-width:100%;height:auto}</style>
+<script src="/_runtime/mermaid-11.16.1.min.js"></script>
+<script>(function(){
+var CFG={"palettes":{"light":{"surface":"#f4efe4","text":"#42392e","line":"#8a7f6d","border":"#7a6c52","bg":"#fffdf8"},"dark":{"surface":"#262b34","text":"#f2f3f5","line":"#a8adb8","border":"#9aa4b8","bg":"#1f232b"}}};
+if(typeof mermaid==='undefined')return;
+var pres=Array.prototype.slice.call(document.querySelectorAll('pre.mermaid')).filter(function(p){if(p.hasAttribute('data-claude-mermaid-claimed'))return false;p.setAttribute('data-claude-mermaid-claimed','1');return true;});
+if(!pres.length)return;
+var mq=window.matchMedia?window.matchMedia('(prefers-color-scheme: dark)'):null;
+var root=document.documentElement;
+var items=pres.map(function(pre){
+var mount=document.createElement('div');mount.className='mermaid-diagram';
+return {pre:pre,mount:mount,src:pre.textContent||''};
+});
+var seq=0;
+var renderGen=0;
+var lastKey='';
+function pageBg(fallback){
+var els=[document.body,document.documentElement];
+for(var i=0;i<els.length;i++){
+var c=els[i]&&getComputedStyle(els[i]).backgroundColor;
+if(c&&c!=='transparent'&&c!=='rgba(0, 0, 0, 0)')return c;
+}
+return fallback;
+}
+function render(){
+var theme=root.getAttribute('data-theme');
+var dark=theme==='dark'||(!!(mq&&mq.matches)&&theme!=='light');
+var pal=dark?CFG.palettes.dark:CFG.palettes.light;
+var bg=pageBg(pal.bg);
+var key=(dark?'d':'l')+'|'+bg;
+if(key===lastKey)return;
+lastKey=key;
+var gen=++renderGen;
+var font=getComputedStyle(document.body).fontFamily||'sans-serif';
+var nat={useMaxWidth:false};
+mermaid.initialize({
+startOnLoad:false,securityLevel:'strict',theme:'base',
+flowchart:nat,sequence:nat,er:nat,state:nat,class:nat,pie:nat,
+gantt:nat,journey:nat,timeline:nat,gitGraph:nat,mindmap:nat,xyChart:nat,
+quadrantChart:nat,sankey:nat,c4:nat,requirement:nat,block:nat,
+packet:nat,kanban:nat,architecture:nat,radar:nat,
+themeVariables:{background:bg,mainBkg:pal.surface,primaryColor:pal.surface,
+primaryTextColor:pal.text,lineColor:pal.line,primaryBorderColor:pal.border,
+nodeBorder:pal.border,clusterBorder:pal.border,edgeLabelBackground:bg,
+clusterBkg:'rgba(127,127,127,0.07)',titleColor:pal.text,
+darkMode:dark,rowOdd:bg,rowEven:'rgba(127,127,127,0.07)',
+attributeBackgroundColorOdd:bg,attributeBackgroundColorEven:'rgba(127,127,127,0.07)',
+fontSize:'16px',fontFamily:font},
+themeCSS:'.node rect, .node circle, .node polygon, .node path, .cluster rect { stroke-width: 2px; }'
+});
+items.forEach(function(it){
+var id='claude-mermaid-'+seq++;
+mermaid.render(id,it.src).then(function(r){
+if(gen!==renderGen)return;
+var prev=it.pre.previousElementSibling;
+if(prev&&prev.className==='mermaid-diagram'&&prev!==it.mount)return;
+it.mount.innerHTML=r.svg;
+if(!it.mount.parentNode)it.pre.parentNode.insertBefore(it.mount,it.pre);
+it.pre.style.display='none';
+},function(){
+var scratch=document.getElementById(id);
+if(scratch)scratch.parentNode.removeChild(scratch);
+scratch=document.getElementById('d'+id);
+if(scratch)scratch.parentNode.removeChild(scratch);
+if(gen!==renderGen)return;
+if(it.mount.parentNode)it.mount.parentNode.removeChild(it.mount);
+it.pre.style.display='';
+});
+});
+}
+render();
+if(mq&&mq.addEventListener)mq.addEventListener('change',render);
+if(typeof MutationObserver!=='undefined')new MutationObserver(render).observe(root,{attributes:true,attributeFilter:['data-theme']});
+})();</script>
+<!--claude-mermaid-runtime-end-->
+
+</body></html>
