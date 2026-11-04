@@ -1,0 +1,1 @@
+ExitCode is a quiz app for programming students.
