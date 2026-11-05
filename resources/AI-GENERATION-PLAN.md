@@ -401,11 +401,17 @@ open:
 - **Whole-quiz versus per-question (§1).** At one request per quiz, almost any
   cap works. At ten requests per quiz, a 50/day cap is five quizzes a day for
   *everyone combined*.
-- **The app-level daily cap** must sit below the provider's, and be shared
-  across teachers rather than per-teacher, because the quota is per *project*,
-  not per user. The `generation_usage` table should therefore count globally as
-  well as per teacher, so one enthusiastic colleague cannot exhaust the day for
-  the rest.
+- **There is no app-level counter.** An earlier draft had a `generation_usage`
+  table counting requests per day. Dropped, for a reason worth keeping: our
+  count could not match the truth. Failed calls may count against the provider,
+  the quota is per project rather than per user, and anything else sharing the
+  key spends from the same pool. A counter that drifts is worse than no counter,
+  because it refuses work that would have succeeded.
+
+  So the provider's own 429 is the signal, and the function turns it into a
+  plain message. If one teacher ever does exhaust the day for the rest, a
+  fairness cap can be added then — but that is a sharing problem, not a quota
+  problem, and it should not be solved before it exists.
 - **Repair retries cost quota too.** The one-retry cap from §2.3 stops being a
   cost control and becomes a quota control.
 
@@ -518,40 +524,43 @@ Five of the six are settled.
 | 3 | Default question types | **All six from the start** (§3) |
 | 4 | Generated-question flag | **Yes** — `generated_at`, cleared on first edit (§4.7) |
 | 5 | Content language | **English only for now** (§5.6) |
-| 6 | Daily cap | **Pending the quota reading** — see below |
+| 6 | Daily cap | **No cap of our own** — handle the provider's refusal (§5.1) |
 
-**Decision 6 cannot be made yet**, and guessing at it would be the one
-genuinely risky thing in this plan. The number has to sit under the provider's
-real limit, and the reported figures for Gemini Flash range from about 20
-requests a day to 1,500 (§5.1). A cap chosen against the wrong end of that
-range either throttles teachers who have quota to spare, or lets the project
-run dry before lunch.
+**Decision 6 turned out not to need a number.** The question was what daily cap
+to set, and the answer is none: the provider enforces its own limit
+authoritatively and we cannot shadow it accurately (§5.1).
 
-So the cap is set after step 0, from the number in AI Studio. Two things about
-it are already decided regardless: it is **shared across teachers**, because
-the quota is per project rather than per user, and exhausting it must produce a
-plain "generation is unavailable until tomorrow" rather than a raw 429.
+What matters instead is the behaviour when it runs out, and that is decided —
+the teacher is told the day's generation is used up, and that they can try
+again tomorrow or build the quiz by hand. Never a raw 429. The app without
+generation is the whole app as it exists today, so this is a degraded feature
+rather than a broken tool, and the message should sound like it.
 
 ---
 
 ## 7. Build order, once those are settled
 
-0. **The spike**, before anything else, because two open design questions hang
-   on it: read the project's real quota in AI Studio, and try the six-way union
-   against `responseSchema` with a throwaway script. An afternoon's work that
-   decides whole-quiz versus per-question (§1) and the shape of the schema
-   (§2.2).
-1. Migration `002`: `generation_usage` (global and per-teacher counters) and
-   `questions.generated_at`. One migration, both decisions.
-2. Edge Function skeleton: JWT → `is_allowed_teacher()` → quota check → 501.
-   Deployable and testable before any model call.
-3. Zod → JSON Schema derivation, with tests.
-4. The generation call, schema-constrained and streamed.
-5. Validate-and-repair, with fixture tests.
-6. The form on My quizzes, and the handoff into the editor.
-7. Per-question **Regenerate** in the editor.
-8. README: the new setup step.
+**Done** (first PR on `ai-quiz-generation`):
 
-Step 0 is cheap and changes what the rest looks like, so it comes first.
-Steps 1–3 are worth doing next and merging on their own — they are the parts
-with no API dependency and the parts that tests can actually cover.
+1. ~~Migration `002`: `questions.generated_at`.~~
+2. ~~Edge Function shell: CORS, JWT, `is_allowed_teacher()`, then 501.~~
+3. ~~The Gemini response schema, and the conversion from what the model returns
+   into what the app stores, with tests.~~
+
+**Next:**
+
+4. **The spike**, which now gates everything left: read the real quota in AI
+   Studio, and try the six-way union against `responseSchema` with a throwaway
+   script. It decides whole-quiz versus per-question (§1) and whether the
+   top-level schema can be assembled at all (§2.2). The per-type schemas built
+   in step 3 are needed either way, which is why they came first.
+5. The generation call itself, schema-constrained and streamed, plus turning
+   the provider's 429 into the message in §5.1.
+6. The repair pass for questions that fail `checkQuestion()`, capped at one
+   retry.
+7. The form on My quizzes, and the handoff into the editor.
+8. Per-question **Regenerate** in the editor.
+9. README: the new setup step, and `supabase secrets set GEMINI_API_KEY`.
+
+Steps 1–3 had no API dependency and are the parts the test suite can cover, so
+they went first and stand alone. Everything from 5 onwards needs the key.
