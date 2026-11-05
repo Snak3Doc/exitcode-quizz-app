@@ -1026,3 +1026,39 @@ legend {
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
+
+/* ---------- list rows whose text can be any length ---------- */
+
+/*
+ * A long quiz name used to push the buttons onto a second line, because the
+ * title column sizes itself to its content and `.row-item` wraps.
+ *
+ * Capping the name would not have fixed it: the names are already capped (100
+ * typed, 60 generated) and it still happened, because whether a row fits
+ * depends on the window width as much as the name. So let the title shrink
+ * and be cut off instead, and keep the buttons at their natural size.
+ *
+ * The flex-basis of 0 is the part that does the work, and `auto` does not.
+ * In a wrapping flex container the browser decides where lines break from the
+ * items' base sizes, before any shrinking happens — so with `auto` the title's
+ * full text width is counted, the row wraps, and min-width never gets a say.
+ * At 0 the title contributes nothing to that decision, then grows into
+ * whatever the buttons leave.
+ *
+ * Wrapping still happens if the buttons alone do not fit, which is the right
+ * behaviour for a genuinely narrow window.
+ */
+.row-item-main {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.row-item-actions {
+  flex-shrink: 0;
+}
+
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
