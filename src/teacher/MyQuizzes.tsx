@@ -234,16 +234,19 @@ export function MyQuizzes() {
               {quizzes.map((quiz) => (
                 <div key={quiz.id} className="stack" style={{ padding: 0 }}>
                   <div className="row-item">
-                    <div>
-                      <div className="mono-lg">
-                        <Link to={`/teacher/quiz/${quiz.id}`}>{quiz.title}</Link>
+                    <div className="row-item-main">
+                      <div className="mono-lg truncate">
+                        {/* The full name on hover, since a long one is cut off. */}
+                        <Link to={`/teacher/quiz/${quiz.id}`} title={quiz.title}>
+                          {quiz.title}
+                        </Link>
                       </div>
-                      <div className="hint">
+                      <div className="hint truncate">
                         {S.quizzes.questionCount(quiz.questionCount)} ·{' '}
                         {S.quizzes.editedWhen(describeWhen(quiz.updatedAt))}
                       </div>
                     </div>
-                    <div className="row-tight">
+                    <div className="row-tight row-item-actions">
                       <button
                         type="button"
                         className="primary"
