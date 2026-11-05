@@ -309,8 +309,11 @@ export function quizSchemaFor(types: readonly string[]): GeminiSchema {
             code: {
               type: 'STRING',
               description:
-                'An optional code block shown above the question. Leave it out unless the ' +
-                'question is about this specific code.',
+                'The code block shown above the question. REQUIRED whenever the question ' +
+                'text refers to a piece of code ("what does this code print", "when this ' +
+                'loop runs") — there is nowhere else for that code to go, and without it ' +
+                'the question cannot be answered. Leave it out only when the question ' +
+                'needs no code at all.',
             },
             codeLanguage: language,
             explanation: {

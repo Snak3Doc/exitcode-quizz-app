@@ -12,6 +12,7 @@ import userEvent from '@testing-library/user-event';
 import { AnswerEditor } from './AnswerEditors';
 import { QuestionForm } from './QuestionForm';
 import { defaultContent } from '../lib/quizzes';
+import { S } from '../strings';
 import { checkQuestion } from '../lib/schema';
 import type { Question, QuestionType } from '../lib/types';
 
@@ -381,5 +382,33 @@ describe('question form', () => {
       .getAllByText(/^[A-F]$/)
       .map((node) => node.textContent);
     expect(letters).toEqual(['A', 'B', 'C']);
+  });
+});
+
+describe('marking a generated question as read', () => {
+  it('offers the button on a question nobody has read', () => {
+    renderForm({ generatedAt: '2026-11-05T00:00:00Z' });
+    expect(screen.getByRole('button', { name: S.editor.markRead })).toBeInTheDocument();
+  });
+
+  it('does not offer it once the question has been read', () => {
+    renderForm({ generatedAt: null });
+    expect(screen.queryByRole('button', { name: S.editor.markRead })).toBeNull();
+  });
+
+  it('clears the flag without touching the question', async () => {
+    // Reading a question and finding it correct is the common case, and it
+    // left no way to say so -- the badge sat on every question already
+    // checked, which is how a marker stops meaning anything.
+    const user = userEvent.setup();
+    const latest = renderForm({
+      generatedAt: '2026-11-05T00:00:00Z',
+      prompt: 'Which is a list method?',
+    });
+
+    await user.click(screen.getByRole('button', { name: S.editor.markRead }));
+
+    expect(latest.question.generatedAt).toBeNull();
+    expect(latest.question.prompt).toBe('Which is a list method?');
   });
 });

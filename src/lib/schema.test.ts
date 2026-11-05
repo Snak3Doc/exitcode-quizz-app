@@ -406,3 +406,114 @@ describe('validateQuizForHosting', () => {
     expect(problems.filter((p) => p === 'a line is empty')).toHaveLength(1);
   });
 });
+
+describe('a question that points at code which is not there', () => {
+  function question(over: Record<string, unknown> = {}) {
+    return {
+      type: 'mc_single' as const,
+      prompt: 'What will this code print?',
+      code: null,
+      codeLanguage: null,
+      timingMode: 'wait',
+      timeLimitSeconds: null,
+      explanation: null,
+      content: {
+        options: [
+          { id: 'a', kind: 'text', text: '0 1 2', correct: true },
+          { id: 'b', kind: 'text', text: '1 2 3', correct: false },
+        ],
+      },
+      ...over,
+    };
+  }
+
+  const refersToCode = 'the question text refers to code, but there is no code to look at';
+
+  // These three came out of a real generated quiz. All twelve questions in it
+  // had no code block, and these are the ones that made no sense without one.
+  it.each([
+    'What will this code print?',
+    'What is printed by this code?',
+    'What is the first number printed when this loop runs?',
+  ])('rejects %s', (prompt) => {
+    expect(checkQuestion(question({ prompt }))).toContain(refersToCode);
+  });
+
+  it('is happy once the code is there', () => {
+    expect(
+      checkQuestion(
+        question({ code: 'for i in range(3):\n    print(i)', codeLanguage: 'python' }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('leaves alone a question that carries its code inline', () => {
+    // Nothing is missing here -- the code is in the sentence.
+    expect(
+      checkQuestion(question({ prompt: 'What numbers does list(range(5, 1, -1)) produce?' })),
+    ).toEqual([]);
+  });
+
+  it('leaves alone a general question about loops', () => {
+    expect(
+      checkQuestion(
+        question({
+          prompt: 'When iterating with enumerate(), what does each step of the loop provide?',
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('leaves alone a question whose options are the code', () => {
+    // "Which of the following loops is correct?" shows the code in the options.
+    expect(
+      checkQuestion(
+        question({
+          prompt: 'Which of the following loops prints the index and the value?',
+          content: {
+            options: [
+              { id: 'a', kind: 'code', language: 'python', text: 'for i, v in enumerate(n):', correct: true },
+              { id: 'b', kind: 'code', language: 'python', text: 'for i in n:', correct: false },
+            ],
+          },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('leaves alone fill in the blank, whose code is the snippet', () => {
+    expect(
+      checkQuestion(
+        question({
+          type: 'fill_blank',
+          prompt: 'Complete the code so it prints 4, 6, 8 and 10.',
+          content: {
+            language: 'python',
+            snippet: 'for i in {{1}}(4, 12, 2):\n    print(i)',
+            wordBank: ['range', 'len', 'enumerate'],
+            answers: { '1': 'range' },
+          },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('leaves alone order the lines, whose code is the lines', () => {
+    expect(
+      checkQuestion(
+        question({
+          type: 'order_lines',
+          prompt: 'Reorder these lines to print the sum of this list.',
+          content: {
+            language: 'python',
+            lines: [
+              { id: 'a', text: 'total = 0' },
+              { id: 'b', text: 'for n in nums:' },
+              { id: 'c', text: '    total += n' },
+            ],
+          },
+        }),
+      ),
+    ).toEqual([]);
+  });
+});

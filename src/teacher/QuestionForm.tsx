@@ -24,6 +24,18 @@ export function QuestionForm({
   /** Absent when generation is not set up, so the button simply is not there. */
   onRegenerate?: () => void;
 }) {
+  /**
+   * Clearing the Unread badge without changing anything.
+   *
+   * Editing a question clears it too, but reading one and finding it correct
+   * is the common case and left no way to say so — the badge sat there on
+   * every question the teacher had already checked, which is exactly how a
+   * marker stops meaning anything.
+   */
+  function markRead() {
+    onChange({ ...question, generatedAt: null });
+  }
+
   function patch(next: Partial<Question>) {
     onChange({ ...question, ...next });
   }
@@ -39,6 +51,16 @@ export function QuestionForm({
       <div className="title-bar">
         <span>{S.editor.questionForm}</span>
         <span className="row-tight">
+          {question.generatedAt !== null && (
+            <button
+              type="button"
+              className="ghost"
+              title={S.editor.markReadTitle}
+              onClick={markRead}
+            >
+              {S.editor.markRead}
+            </button>
+          )}
           {onRegenerate && (
             <button type="button" className="ghost" onClick={onRegenerate}>
               {S.editor.regenerate}

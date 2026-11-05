@@ -77,6 +77,12 @@ export function buildSystemPrompt(types: readonly string[]): string {
     '',
     'Use only these languages in code: python, javascript, html, css, plaintext.',
     '',
+    'If the question text refers to a piece of code — "what does this code print", ' +
+      '"when this loop runs", "the following program" — then you MUST fill in the `code` ' +
+      'field with that code, and set `codeLanguage`. There is nowhere else for it to go, ' +
+      'and a question that points at code the class cannot see is unanswerable. Either ' +
+      'include the code or write the question so it does not need any.',
+    '',
     'Rules for the question types you may use:',
     ...rules.map((rule) => `- ${rule}`),
   ].join('\n');
