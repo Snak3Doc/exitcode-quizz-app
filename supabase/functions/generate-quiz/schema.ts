@@ -237,7 +237,10 @@ export function questionSchemaFor(type: string): GeminiSchema {
   return {
     type: 'OBJECT',
     propertyOrdering: ['prompt', 'code', 'codeLanguage', 'explanation', 'content'],
-    required: ['prompt', 'content'],
+    // The explanation is required on purpose. It is the only thing a student
+    // who got the question wrong reads, it costs almost nothing to generate,
+    // and left optional a model under output pressure drops it first.
+    required: ['prompt', 'explanation', 'content'],
     properties: {
       prompt: {
         type: 'STRING',

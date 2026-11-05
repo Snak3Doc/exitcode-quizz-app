@@ -25,6 +25,7 @@ import {
   MAX_LINES,
   MAX_OPTIONS,
   MAX_WORD_BANK,
+  MIN_ACCEPTED_ANSWERS,
   MIN_LINES,
   MIN_OPTIONS,
   MIN_WORD_BANK,
@@ -51,6 +52,7 @@ describe('the Gemini schema has not drifted from the app', () => {
   it('uses the same bounds the validation does', () => {
     expect(BOUNDS.minOptions).toBe(MIN_OPTIONS);
     expect(BOUNDS.maxOptions).toBe(MAX_OPTIONS);
+    expect(BOUNDS.minAccepted).toBe(MIN_ACCEPTED_ANSWERS);
     expect(BOUNDS.maxAccepted).toBe(MAX_ACCEPTED_ANSWERS);
     expect(BOUNDS.minWordBank).toBe(MIN_WORD_BANK);
     expect(BOUNDS.maxWordBank).toBe(MAX_WORD_BANK);
@@ -74,6 +76,14 @@ describe('the Gemini schema has not drifted from the app', () => {
     // Ids are minted here, not generated. See schema.ts for why.
     for (const type of QUESTION_TYPES) {
       expect(JSON.stringify(questionSchemaFor(type))).not.toMatch(/"id"/);
+    }
+  });
+
+  it('always asks for an explanation', () => {
+    // Optional is not good enough: it is the only thing a student who got the
+    // question wrong reads, and a model under output pressure drops it first.
+    for (const type of QUESTION_TYPES) {
+      expect(questionSchemaFor(type).required).toContain('explanation');
     }
   });
 
@@ -381,10 +391,30 @@ describe('a whole batch', () => {
     expect(outcome.dropped).toHaveLength(2);
   });
 
-  it('does not trust the model to return the number of questions asked for', () => {
+  it('reports an extra question the model was not asked for', () => {
     const outcome = normaliseBatch(['true_false'], [good, good], untimed);
     expect(outcome.kept).toHaveLength(1);
     expect(outcome.dropped).toHaveLength(1);
+  });
+
+  it('reports the questions the model never returned', () => {
+    // The dangerous direction. A teacher who asked for three, got two, and was
+    // told nothing has no way to notice -- and the quota for three is spent
+    // either way.
+    const outcome = normaliseBatch(
+      ['true_false', 'true_false', 'true_false'],
+      [good, good],
+      untimed,
+    );
+    expect(outcome.kept).toHaveLength(2);
+    expect(outcome.dropped).toHaveLength(1);
+    expect(outcome.dropped[0].number).toBe(3);
+  });
+
+  it('reports every question when the model returns nothing at all', () => {
+    const outcome = normaliseBatch(['true_false', 'true_false'], [], untimed);
+    expect(outcome.kept).toEqual([]);
+    expect(outcome.dropped).toHaveLength(2);
   });
 
   it('produces questions the real validator is happy with', () => {

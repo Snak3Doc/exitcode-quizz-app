@@ -25,9 +25,14 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
  * `message` is a readable fallback for curl and for logs — the app has its own
  * wording in `src/strings.ts` and should prefer it.
  *
- * Codes: method_not_allowed, unauthenticated, not_approved, not_implemented.
- * `quota_exhausted` joins them once generation lands: when Gemini's free tier
- * is spent the teacher is told to try tomorrow or build the quiz by hand.
+ * Codes: method_not_allowed, unauthenticated, not_approved,
+ * server_misconfigured, not_implemented. `quota_exhausted` joins them once
+ * generation lands: when Gemini's free tier is spent the teacher is told to
+ * try tomorrow or build the quiz by hand.
+ *
+ * server_misconfigured is the operator's problem rather than the teacher's —
+ * the app should say so plainly instead of folding it into a generic failure,
+ * or a missing environment variable is very hard to recognise from the UI.
  */
 interface ErrorBody {
   error: { code: string; message: string };

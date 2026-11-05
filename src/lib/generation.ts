@@ -175,6 +175,15 @@ export interface GenerationOutcome {
  * also spends quota the teacher cannot get back.
  *
  * So: keep what passes, and say plainly what did not.
+ *
+ * `types[i]` describes `raw[i]`, and nothing checks that. The model is not
+ * asked which type each question is — the schema fixes one type per request —
+ * so the pairing is only sound when each question was generated on its own, or
+ * when the response is known to come back in the order it was asked for. If a
+ * single whole-quiz response ever reorders its questions, every one of them is
+ * validated against the wrong type and the whole batch is dropped. Which of
+ * those two shapes we use is still open (plan §1), so this stays a documented
+ * constraint on the caller rather than a guess at a fix.
  */
 export function normaliseBatch(
   types: QuestionType[],
@@ -184,16 +193,28 @@ export function normaliseBatch(
   const kept: QuizFileQuestion[] = [];
   const dropped: GenerationOutcome['dropped'] = [];
 
-  raw.forEach((item, index) => {
+  // Walk the longer of the two: a model can return fewer questions than were
+  // asked for as easily as more, and a teacher who asked for ten and silently
+  // got seven has no way to tell, having already spent the quota for ten.
+  const count = Math.max(types.length, raw.length);
+
+  for (let index = 0; index < count; index += 1) {
     const type = types[index];
+    const item = raw[index];
+
     if (type === undefined) {
       dropped.push({ number: index + 1, problems: ['unexpected extra question'] });
-      return;
+      continue;
     }
+    if (item === undefined) {
+      dropped.push({ number: index + 1, problems: ['the model did not return this question'] });
+      continue;
+    }
+
     const { question, problems } = normaliseQuestion(type, item, timing);
     if (problems.length === 0) kept.push(question);
     else dropped.push({ number: index + 1, problems });
-  });
+  }
 
   return { kept, dropped };
 }
