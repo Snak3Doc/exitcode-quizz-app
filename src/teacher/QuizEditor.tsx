@@ -282,6 +282,35 @@ export function QuizEditor() {
     [questions, openId],
   );
 
+  /**
+   * Looking at a question and then moving on marks it read.
+   *
+   * Deliberately on the way out rather than the way in: a question is not
+   * read the instant it is selected, and clearing the badge then would mean
+   * it vanished before the teacher had looked at anything.
+   *
+   * The one question this never covers is the last one they open, since there
+   * is nothing to move on to. The Mark as read button is still there for that.
+   */
+  const previousOpenId = useRef<string | null>(null);
+  useEffect(() => {
+    const left = previousOpenId.current;
+    previousOpenId.current = openId;
+    if (left === null || left === openId) return;
+
+    const question = questions.find((q) => q.id === left);
+    // A deleted question is gone, not read.
+    if (!question || question.generatedAt === null) return;
+
+    const read: Question = { ...question, generatedAt: null };
+    setQuestions((current) => current.map((q) => (q.id === read.id ? read : q)));
+    pending.current.questions.set(read.id, read);
+    scheduleSave();
+    // `questions` is read here but must not re-run this: it changes on every
+    // keystroke, and the move between questions is the only thing that counts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openId]);
+
   if (loading) {
     return (
       <div className="page">
