@@ -142,8 +142,14 @@ export function QuizEditor() {
   }
 
   function editQuestion(next: Question) {
-    setQuestions((current) => current.map((q) => (q.id === next.id ? next : q)));
-    pending.current.questions.set(next.id, next);
+    // A person is editing it, so it is no longer unread. `updateQuestion`
+    // clears the column; clearing it here too means the badge goes the moment
+    // they touch the question rather than waiting for a reload. A badge that
+    // still claims a question is unread after it has been read is worse than
+    // no badge at all.
+    const edited: Question = { ...next, generatedAt: null };
+    setQuestions((current) => current.map((q) => (q.id === edited.id ? edited : q)));
+    pending.current.questions.set(edited.id, edited);
     setProblems(null);
     scheduleSave();
   }
