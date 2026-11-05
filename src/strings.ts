@@ -45,6 +45,48 @@ export const S = {
     openInEditor: 'Open in editor',
     untitled: 'Untitled quiz',
     copyOf: (title: string) => `Copy of ${title}`,
+    generate: 'Generate a quiz',
+  },
+
+  // ---------- Teacher: generating a quiz ----------
+  generate: {
+    heading: 'Generate a quiz',
+    topicLabel: 'What should the quiz be about?',
+    topicPlaceholder: 'Python for loops and range(), for beginners',
+    countLabel: 'How many questions?',
+    typesLabel: 'Question types',
+    timingLabel: 'Timing',
+    waitForEveryone: 'Wait for everyone',
+    timed: 'Timed',
+    secondsLabel: 'Seconds',
+    submit: 'Generate',
+    working: 'Writing questions…',
+    cancel: 'Cancel',
+
+    missingTopic: 'Say what the quiz should be about.',
+    missingTypes: 'Choose at least one question type.',
+
+    /** Shown above the editor once a generated quiz opens. */
+    draftNotice:
+      'These questions were written by a machine and nobody has read them yet. ' +
+      'Check each one before you host it — especially that the answers are right.',
+    droppedSome: (kept: number, dropped: number) =>
+      `Kept ${kept} ${kept === 1 ? 'question' : 'questions'}. ` +
+      `${dropped} came back unusable and ${dropped === 1 ? 'was' : 'were'} left out.`,
+    noneUsable: 'Nothing usable came back. Try again, or rewrite the topic.',
+
+    // Failures, by the code the function returns.
+    unavailable:
+      'Generation is busy or out of free requests for now. Try again later, or build ' +
+      'the quiz by hand.',
+    failed: 'Generation did not work this time. Try again.',
+    saveFailed:
+      'The questions were written but could not be saved. Nothing was lost on your side — ' +
+      'check that the database has had the latest migration run against it.',
+    notApproved: 'This account is not approved to generate quizzes.',
+    misconfigured:
+      'Generation is not set up on the server. The API key or the function is missing.',
+    unreachable: "Couldn't reach the generator. Check your connection and try again.",
   },
 
   // ---------- Teacher: editor ----------
@@ -57,6 +99,10 @@ export const S = {
     hostThisQuiz: 'Host this quiz',
     questions: 'Questions',
     addQuestion: '+ Add question',
+    gotIt: 'Got it',
+    unreviewed: 'Unread',
+    unreviewedTitle:
+      'Written by the generator and not read by anyone yet. Editing it clears this.',
     noQuestions: 'No questions yet. Click + Add question.',
     duplicateQuestion: 'Duplicate question',
     deleteQuestion: 'Delete question',

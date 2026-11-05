@@ -174,6 +174,10 @@ export function parseQuizFile(text: string, byteLength?: number): ImportResult {
         typeof q.content === 'object' && q.content !== null && !Array.isArray(q.content)
           ? (q.content as Record<string, unknown>)
           : {},
+      // An imported file is the teacher's own work, whatever wrote it
+      // originally, so it does not arrive flagged as unreviewed. The flag is
+      // for questions this app generated and nobody has looked at yet.
+      generatedAt: null,
     };
 
     // Same checks as hosting, so an imported quiz is ready to host.

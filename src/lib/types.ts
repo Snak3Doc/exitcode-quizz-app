@@ -87,6 +87,15 @@ export interface Question {
   explanation: string | null;
   /** Shape depends on `type`; drafts may be incomplete. */
   content: Record<string, unknown>;
+  /**
+   * When the generator wrote this question, if it did. Cleared the moment a
+   * person edits it, so null means a human has had a hand in this one.
+   *
+   * It records whether someone *looked*, not whether the question is *right* —
+   * nothing in the app can check that a generated snippet really prints what
+   * its answer claims.
+   */
+  generatedAt: string | null;
 }
 
 export interface QuizSummary {
@@ -129,6 +138,7 @@ export interface QuestionRow {
   time_limit_seconds: number | null;
   explanation: string | null;
   content: Record<string, unknown>;
+  generated_at: string | null;
   created_at: string;
   updated_at: string;
 }

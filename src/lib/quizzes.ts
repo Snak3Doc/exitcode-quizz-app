@@ -31,6 +31,7 @@ export function toQuestion(row: QuestionRow): Question {
     timeLimitSeconds: row.time_limit_seconds,
     explanation: row.explanation,
     content: (row.content ?? {}) as Record<string, unknown>,
+    generatedAt: row.generated_at ?? null,
   };
 }
 
@@ -47,6 +48,7 @@ export function toQuestionFields(question: Question) {
       question.timingMode === 'timed' ? (question.timeLimitSeconds ?? 30) : null,
     explanation: question.explanation,
     content: question.content,
+    generated_at: question.generatedAt,
   };
 }
 
@@ -63,6 +65,8 @@ export function blankQuestion(quizId: string, position: number): Omit<Question, 
     timeLimitSeconds: null,
     explanation: null,
     content: defaultContent('mc_single'),
+    // A person is writing this one by hand, so it is reviewed by definition.
+    generatedAt: null,
   };
 }
 
@@ -196,7 +200,13 @@ export async function insertQuestion(
 export async function updateQuestion(question: Question): Promise<void> {
   const { error } = await supabase
     .from('questions')
-    .update(toQuestionFields(question))
+    .update({
+      ...toQuestionFields(question),
+      // A person has edited this one, so it is no longer unreviewed. Reordering
+      // does not come through here -- savePositions writes `position` alone --
+      // so moving a question about does not count as having read it.
+      generated_at: null,
+    })
     .eq('id', question.id);
   if (error) throw error;
 }
