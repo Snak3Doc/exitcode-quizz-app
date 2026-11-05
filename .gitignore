@@ -8,3 +8,7 @@ dist-ssr
 .vercel
 coverage
 *.tsbuildinfo
+
+# Supabase CLI scratch state. Holds a pooler connection URL, among other
+# things, so it has no business in the repository.
+supabase/.temp/

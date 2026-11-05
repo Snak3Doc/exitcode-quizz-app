@@ -560,3 +560,43 @@ describe('real output for the two risky types', () => {
     expect(lines[2].text).toBe('    total = total + i');
   });
 });
+
+/**
+ * From the deployed Edge Function on 2026-11-05 — the first end-to-end run,
+ * browser session through to Gemini and back.
+ *
+ * Kept for one thing the other fixtures miss: a question carrying a code
+ * block. The database insists `code` and `code_language` are both set or both
+ * null, so that pairing is real logic rather than a passthrough.
+ */
+const realGeminiWithCode = {
+  type: 'mc_single',
+  prompt: 'What does this code print?',
+  code: 'count = 1\nwhile count < 4:\n    count = count + 1\nprint(count)',
+  codeLanguage: 'python',
+  explanation:
+    'When count is 3, the condition 3 < 4 is True, so count increases to 4. Next, the loop tests 4 < 4, which is False, so the loop terminates and 4 is printed.',
+  content: {
+    options: [
+      { kind: 'text', text: '3', correct: false },
+      { kind: 'text', text: '4', correct: true },
+      { kind: 'text', text: '5', correct: false },
+      { kind: 'text', text: '1', correct: false },
+    ],
+  },
+};
+
+describe('real output carrying a code block', () => {
+  it('keeps the code and its language together', () => {
+    const { question, problems } = normaliseQuestion('mc_single', realGeminiWithCode, untimed);
+    expect(problems).toEqual([]);
+    expect(question.code).toMatch(/while count < 4/);
+    expect(question.codeLanguage).toBe('python');
+  });
+
+  it('keeps the newlines that make the code readable', () => {
+    const { question } = normaliseQuestion('mc_single', realGeminiWithCode, untimed);
+    expect(question.code?.split('\n')).toHaveLength(4);
+    expect(question.code?.split('\n')[2]).toBe('    count = count + 1');
+  });
+});
