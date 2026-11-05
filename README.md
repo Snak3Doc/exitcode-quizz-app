@@ -130,6 +130,53 @@ Google itself needs nothing new. The app asks Supabase to return to
 `window.location.origin + '/teacher'`, so the redirect URI Google sees is
 always the Supabase callback it already knows.
 
+### 8. Quiz generation (optional)
+
+A teacher can have an LLM draft a quiz from a prompt. The app works without
+this; skip the section and nothing else changes.
+
+Get a key from [Google AI Studio](https://aistudio.google.com/apikey) and put
+it in `.env.local`:
+
+```
+GEMINI_API_KEY=your-key-here
+```
+
+That file is git-ignored, and because the name has no `VITE_` prefix Vite will
+not put it in the browser bundle — which is the whole point. A key in the
+bundle is readable by every student, and a scraped key quietly drains the day's
+free quota, so the first teacher to try before a lesson finds generation dead
+with no explanation.
+
+Run [`supabase/migrations/002_generated_questions.sql`](supabase/migrations/002_generated_questions.sql)
+in the SQL editor, then deploy the function that holds the key:
+
+```bash
+supabase login
+supabase functions deploy generate-quiz --project-ref <your-ref> --use-api
+supabase secrets set --env-file .env.local --project-ref <your-ref>
+```
+
+Two notes, both learned the hard way. `--use-api` bundles server-side, so you
+do not need Docker running. And passing `--project-ref` means you can skip
+`supabase link`, which otherwise asks for the database password you do not
+need here.
+
+To check it worked, this should answer `401` — deployed, and refusing anyone
+who is not signed in:
+
+```bash
+curl -i -X POST https://<your-ref>.supabase.co/functions/v1/generate-quiz
+```
+
+> In PowerShell, `curl` is an alias for `Invoke-WebRequest` and will not take
+> those flags. Use `curl.exe` instead, or run it from Git Bash.
+
+Generated questions are a draft, never a finished quiz. Nothing in the app can
+check that a generated snippet really prints what its answer claims, so the
+editor marks them as unreviewed until you edit them, and the hosting checks
+still apply.
+
 ### Before a class
 
 Free Supabase projects pause after about a week of inactivity. Check the
