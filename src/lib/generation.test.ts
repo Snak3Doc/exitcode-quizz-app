@@ -18,7 +18,7 @@ import {
   type GeneratedQuestion,
 } from './generation';
 import { checkQuestion } from './schema';
-import { CODE_LANGUAGES, QUESTION_TYPES } from './types';
+import { CODE_LANGUAGES, QUESTION_TYPES, type QuestionType } from './types';
 import {
   MAX_ACCEPTED_ANSWERS,
   MAX_BLANKS,
@@ -420,5 +420,78 @@ describe('a whole batch', () => {
   it('produces questions the real validator is happy with', () => {
     const outcome = normaliseBatch(['true_false'], [good], untimed);
     expect(checkQuestion(outcome.kept[0])).toEqual([]);
+  });
+});
+
+/**
+ * Captured verbatim from Gemini on 2026-11-05 by `scripts/spike-gemini-schema.ts`
+ * — a real mixed-type quiz returned in one request against the union schema.
+ *
+ * Kept because every other fixture here is something I wrote, and a fixture
+ * written by the person who also wrote the converter proves much less. This one
+ * includes the things a model actually does and a hand-written example tends to
+ * miss: `kind: 'code'` options carrying a language, and an explanation written
+ * at the length a model chooses.
+ */
+const realGeminiOutput = {
+  questions: [
+    {
+      type: 'mc_single',
+      prompt: 'In Python, which method is used to add a new item to the end of an existing list?',
+      explanation:
+        'The append() method adds a single item to the end of a list in Python. Methods like add() are used for sets, while push() is common in JavaScript.',
+      content: {
+        options: [
+          { kind: 'code', language: 'python', text: 'append()', correct: true },
+          { kind: 'code', language: 'python', text: 'add()', correct: false },
+          { kind: 'code', language: 'python', text: 'push()', correct: false },
+          { kind: 'code', language: 'python', text: 'insert_end()', correct: false },
+        ],
+      },
+    },
+    {
+      type: 'order_lines',
+      prompt:
+        'Arrange these lines of Python code in order to ask the user for their name and print a personalized greeting.',
+      explanation:
+        "First, you collect user input and assign it to the variable 'name'. Second, you build the greeting message. Finally, you use print() to output the message.",
+      content: {
+        language: 'python',
+        lines: [
+          'name = input("What is your name? ")',
+          'greeting = "Hello, " + name',
+          'print(greeting)',
+        ],
+      },
+    },
+  ],
+};
+
+describe('real output from the model', () => {
+  const types = realGeminiOutput.questions.map((q) => q.type as QuestionType);
+
+  it('converts into questions that are ready to host', () => {
+    const outcome = normaliseBatch(types, realGeminiOutput.questions, untimed);
+    expect(outcome.dropped).toEqual([]);
+    expect(outcome.kept).toHaveLength(2);
+    for (const question of outcome.kept) {
+      expect(checkQuestion(question)).toEqual([]);
+    }
+  });
+
+  it('keeps the language on code options', () => {
+    const outcome = normaliseBatch(types, realGeminiOutput.questions, untimed);
+    const options = outcome.kept[0].content.options as { language?: string; kind: string }[];
+    expect(options.every((o) => o.kind === 'code' && o.language === 'python')).toBe(true);
+  });
+
+  it('keeps the ordered lines in the order the model gave them', () => {
+    const outcome = normaliseBatch(types, realGeminiOutput.questions, untimed);
+    const lines = outcome.kept[1].content.lines as { text: string }[];
+    expect(lines.map((l) => l.text)).toEqual([
+      'name = input("What is your name? ")',
+      'greeting = "Hello, " + name',
+      'print(greeting)',
+    ]);
   });
 });

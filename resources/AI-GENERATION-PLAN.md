@@ -106,13 +106,22 @@ It is more moving parts, so it is not the thing to build first. Noted here so
 the first design does not paint us into a corner: keeping generation
 per-question-addressable from day one is what preserves this option.
 
-**This is no longer purely a quality question.** Two findings in §2.2 and §5.1
-may force per-question generation whatever we would have preferred: the
-six-way union may not express in the provider's schema dialect, and
-per-question calls make each one flat and simple. Pulling the other way, free
-tiers are capped in **requests**, and ten questions becomes ten requests
-instead of one. Whichever way that resolves, it resolves from the spike in
-§5.1 — not from taste.
+**Resolved by the spike, 2026-11-05: whole-quiz generation works.**
+
+`scripts/spike-gemini-schema.ts` asked Gemini for a two-question mixed-type
+quiz against the union schema and got back an `mc_single` with a proper
+`options` array and an `order_lines` with its `lines` in the correct order,
+each `content` matching its own declared `type`. The output is kept as a
+fixture in `src/lib/generation.test.ts` and converts into questions that pass
+`checkQuestion()` with no problems at all.
+
+So the worry in §2.2 did not materialise, and the quota pressure that pushed
+the other way mostly evaporates with it: **a quiz is one request, not ten.**
+Even at the low end of the reported free-tier range that is a usable number of
+quizzes a day.
+
+Per-question regeneration is still built, for the reason it always was — it is
+the repair path — but it is no longer load-bearing for the architecture.
 
 ---
 
@@ -156,12 +165,15 @@ thing to express in a constrained-decoding schema, and the schema dialects
 these APIs accept are subsets of JSON Schema with their own limits on `anyOf`
 and discriminators.
 
-This needs a spike before anything is built on it, because it has a large
-consequence (§1): if the union will not express cleanly, generating **one
-question at a time with its type fixed per call** sidesteps the problem
-entirely — each call then has a single, flat schema. The fallback if even that
-disappoints is to flatten the schema with every type-specific field optional
-and let `checkQuestion()` do the real work.
+**Spiked, and it works.** Gemini accepted `anyOf` over three different content
+schemas inside an array of questions, and filled each one in correctly against
+its sibling `type` field. No `$ref`, no `allOf`, no `additionalProperties` —
+the dialect handles a plain union of object schemas.
+
+The fallbacks are recorded in case it ever stops working: generate one question
+at a time with its type fixed, so each call has a single flat schema; or
+failing that, flatten every type-specific field to optional and let
+`checkQuestion()` do the real work.
 
 ### 2.3 Structured output is not enough — validate, then repair
 
@@ -423,6 +435,33 @@ Still needed regardless:
   until tomorrow" message, never a raw 429. The teacher can still build quizzes
   by hand, which is the whole existing app.
 
+#### What the free tier actually feels like
+
+The spike turned up something the published limits do not mention. Asking for
+one small question on 2026-11-05:
+
+- `gemini-3.8-flash` — 503, twice, five seconds apart
+- `gemini-3.7-flash` — 503, and once a connection that was accepted and then
+  never answered, which killed the script until it was given a timeout
+- `gemini-3.6-flash` — 503
+- `gemini-3.5-flash` — answered
+
+So the newest free models are congested, and the failure is not the clean 429
+the plan assumed. Three consequences for the Edge Function:
+
+- **Try a list of models, newest first, not one.** The fallback is what got an
+  answer at all. A teacher should not see generation fail because the newest
+  model was busy when an older one was free.
+- **Set an explicit request timeout.** An overloaded model accepts the
+  connection and then goes quiet; without a timeout that surfaces minutes
+  later as an unhandled error.
+- **Treat 503 like 429 for the teacher.** Both mean try later. The wording in
+  §5.1 covers both; the function should not expose the difference.
+
+Also worth knowing: a retired model stays in the models list and 404s only when
+called, with its replacement named in the error. `gemini-2.5-flash` did exactly
+that. Reading `supportedGenerationMethods` is not enough to pick a model.
+
 #### One thing to check before committing
 
 Free tiers often differ from paid ones in how submitted data may be used. For a
@@ -549,11 +588,11 @@ rather than a broken tool, and the message should sound like it.
 
 **Next:**
 
-4. **The spike**, which now gates everything left: read the real quota in AI
-   Studio, and try the six-way union against `responseSchema` with a throwaway
-   script. It decides whole-quiz versus per-question (§1) and whether the
-   top-level schema can be assembled at all (§2.2). The per-type schemas built
-   in step 3 are needed either way, which is why they came first.
+4. ~~**The spike.**~~ Done, 2026-11-05 — `scripts/spike-gemini-schema.ts`. The
+   union works, so generation is **one request per quiz** (§1, §2.2). It also
+   turned up how the free tier actually fails, which changes what the function
+   has to handle (§5.1). Still outstanding from it: reading the real quota in
+   AI Studio, which nothing is blocked on now that a quiz costs one request.
 5. The generation call itself, schema-constrained and streamed, plus turning
    the provider's 429 into the message in §5.1.
 6. The repair pass for questions that fail `checkQuestion()`, capped at one
