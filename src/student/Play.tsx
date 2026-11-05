@@ -81,15 +81,17 @@ export function Play() {
   // ---------- join ----------
 
   useEffect(() => {
-    // A refresh loses the game: there is no rejoining.
-    const marker = readMarker();
-    if (!pending) {
-      if (marker && marker.code === code) {
-        clearMarker();
-        setScreen('removed');
-      } else {
-        navigate('/', { replace: true });
-      }
+    const action = openAction(readMarker(), pending, code);
+    if (action === 'left') {
+      // The marker stays until they go back to the join screen, so that this
+      // effect reaches the same decision every time it runs. Clearing it here
+      // would let React's development double-invoke join the game for real on
+      // the second pass, behind the screen telling them they have left.
+      setScreen('removed');
+      return;
+    }
+    if (action === 'home') {
+      navigate('/', { replace: true });
       return;
     }
 
@@ -281,7 +283,10 @@ export function Play() {
       <Message
         heading={S.play.leftHeading}
         body={S.play.leftBody}
-        onBack={() => navigate('/')}
+        onBack={() => {
+          clearMarker();
+          navigate('/');
+        }}
       />
     );
   }
@@ -523,6 +528,24 @@ function rejectionMessage(reason: JoinRejectReason | 'timeout'): string {
 }
 
 // ---------- remembering that this tab was in a game ----------
+
+/**
+ * What a tab should do when /play/:code opens.
+ *
+ * A refresh loses the game: there is no rejoining. The marker, not `pending`,
+ * is what says this tab has already been in this game — React Router keeps
+ * location.state in history.state, which the browser restores on a reload, so
+ * `pending` survives a refresh too and cannot tell a refresh from a fresh join.
+ */
+export function openAction(
+  marker: { code: string; playerId: string } | null,
+  pending: PendingJoin | null,
+  code: string,
+): 'left' | 'join' | 'home' {
+  if (marker && marker.code === code) return 'left';
+  if (!pending) return 'home';
+  return 'join';
+}
 
 function writeMarker(marker: { code: string; playerId: string }) {
   try {
