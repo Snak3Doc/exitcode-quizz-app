@@ -38,8 +38,11 @@ npm install
 npm run dev
 ```
 
-Then open <http://localhost:5173>. Teachers go to `/teacher` and bookmark it —
-the student join screen has no link to it.
+Then open <http://localhost:5173>. Teachers get there from the **Sign in as
+teacher** link under the join form, or by going straight to `/teacher`. The
+link gives nothing away: `allowed_teachers` and the row-level security policies
+decide who can read and write, so a student who follows it can sign in and
+still see nothing.
 
 | Command | What it does |
 | --- | --- |
@@ -118,8 +121,14 @@ Import the repo into Vercel (Hobby plan), set `VITE_SUPABASE_URL` and
 `VITE_SUPABASE_ANON_KEY` as environment variables, and deploy. `vercel.json`
 already rewrites every route to `index.html`.
 
-Afterwards add the Vercel URL to Supabase's **Site URL** and redirect URLs, and
-to the Google OAuth client's authorised origins.
+Afterwards add `https://<your-site>/teacher` to Supabase's redirect URLs, under
+**Authentication → URL Configuration**, and set **Site URL** to the deployed
+address. Without the redirect entry Google signs the teacher in and then sends
+them somewhere else.
+
+Google itself needs nothing new. The app asks Supabase to return to
+`window.location.origin + '/teacher'`, so the redirect URI Google sees is
+always the Supabase callback it already knows.
 
 ### Before a class
 
