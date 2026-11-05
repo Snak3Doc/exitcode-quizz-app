@@ -100,6 +100,15 @@ export const S = {
     questions: 'Questions',
     addQuestion: '+ Add question',
     gotIt: 'Got it',
+    regenerate: 'Rewrite',
+    regenerateHeading: 'Rewrite this question',
+    regenerateNoteLabel: 'What should change? (optional)',
+    regenerateNotePlaceholder: 'Make it harder, or use a list instead of a loop',
+    regenerateHint:
+      'Saying what you want works far better than asking for something different — ' +
+      'without it you tend to get another question just as arbitrary as this one.',
+    regenerateSubmit: 'Rewrite it',
+    regenerating: 'Rewriting…',
     unreviewed: 'Unread',
     unreviewedTitle:
       'Written by the generator and not read by anyone yet. Editing it clears this.',

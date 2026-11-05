@@ -197,16 +197,22 @@ export async function insertQuestion(
   return toQuestion(data as QuestionRow);
 }
 
+/**
+ * Saves whatever the question says, `generatedAt` included.
+ *
+ * It does not force the unread flag off. Deciding that a person has read a
+ * question is the editor's job, not this layer's: `editQuestion` clears the
+ * flag when someone types, and having a question written again sets it back,
+ * because the replacement is one nobody has read either. Forcing it to null
+ * here would quietly undo the second of those.
+ *
+ * Reordering never reaches this function -- `savePositions` writes `position`
+ * alone -- so moving a question about does not count as having read it.
+ */
 export async function updateQuestion(question: Question): Promise<void> {
   const { error } = await supabase
     .from('questions')
-    .update({
-      ...toQuestionFields(question),
-      // A person has edited this one, so it is no longer unreviewed. Reordering
-      // does not come through here -- savePositions writes `position` alone --
-      // so moving a question about does not count as having read it.
-      generated_at: null,
-    })
+    .update(toQuestionFields(question))
     .eq('id', question.id);
   if (error) throw error;
 }

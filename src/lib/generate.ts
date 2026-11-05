@@ -11,6 +11,7 @@ import { supabase } from './supabase';
 import { S } from '../strings';
 import {
   applyRepairs,
+  normaliseQuestion,
   normaliseSlots,
   repairable,
   summarise,
@@ -19,7 +20,7 @@ import {
   type TimingChoice,
 } from './generation';
 import { createQuiz, insertQuestions } from './quizzes';
-import type { QuestionType } from './types';
+import type { Question, QuestionType } from './types';
 
 export interface GenerateOptions {
   topic: string;
@@ -194,6 +195,93 @@ async function askForRepairs(
   } catch {
     return [];
   }
+}
+
+/**
+ * Write one question again, because the teacher did not like it.
+ *
+ * The same endpoint the repair pass uses: a replacement is a replacement,
+ * whether the validator rejected the question or a person did. The only
+ * difference is what is given as the reason, so nothing on the server changes.
+ *
+ * The teacher's note is worth asking for. "Write a different question" gets
+ * something equally arbitrary back; "make it harder" or "use a list instead of
+ * a loop" gets what they actually wanted.
+ */
+export async function regenerateQuestion(options: {
+  /** What the quiz is about. The title is the best description we have. */
+  topic: string;
+  question: Question;
+  note?: string;
+}): Promise<Question> {
+  const { question, note } = options;
+
+  const reason =
+    note && note.trim() !== ''
+      ? note.trim()
+      : 'the teacher asked for a different question on the same topic';
+
+  const { data, error } = await supabase.functions.invoke<FunctionReply>('generate-quiz', {
+    body: {
+      topic: options.topic.trim() || S.quizzes.untitled,
+      repair: [
+        {
+          type: question.type,
+          problems: [reason],
+          // What they have now, so the model writes something different rather
+          // than handing back the same question in other words.
+          question: {
+            prompt: question.prompt,
+            code: question.code ?? undefined,
+            codeLanguage: question.codeLanguage ?? undefined,
+            explanation: question.explanation ?? undefined,
+            content: question.content,
+          },
+        },
+      ],
+    },
+  });
+
+  if (error) {
+    let code: string | undefined;
+    try {
+      const response = (error as { context?: Response }).context;
+      if (response && typeof response.json === 'function') {
+        code = ((await response.json()) as FunctionReply).error?.code;
+      }
+    } catch {
+      // Keep the generic message.
+    }
+    throw new GenerationError(messageForCode(code));
+  }
+
+  const raw = Array.isArray(data?.questions) ? (data.questions as GeneratedQuestion[]) : [];
+  if (raw.length === 0) throw new GenerationError(S.generate.failed);
+
+  const { question: replacement, problems } = normaliseQuestion(
+    question.type,
+    raw[0],
+    question.timingMode === 'timed'
+      ? { mode: 'timed', seconds: question.timeLimitSeconds ?? undefined }
+      : { mode: 'wait' },
+  );
+
+  // Unlike the repair pass, there is nothing to fall back on here: the teacher
+  // asked for this one and is waiting. Say it did not work rather than quietly
+  // leaving the old question in place.
+  if (problems.length > 0) throw new GenerationError(S.generate.failed);
+
+  return {
+    ...question,
+    type: replacement.type,
+    prompt: replacement.prompt,
+    code: replacement.code,
+    codeLanguage: replacement.codeLanguage,
+    explanation: replacement.explanation,
+    content: replacement.content,
+    // A fresh question nobody has read, so the badge comes back.
+    generatedAt: new Date().toISOString(),
+  };
 }
 
 /**

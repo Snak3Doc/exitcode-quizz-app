@@ -26,6 +26,8 @@ import { CSS } from '@dnd-kit/utilities';
 import { S } from '../strings';
 import { TopBar } from '../components/TopBar';
 import { QuestionForm } from './QuestionForm';
+import { RegenerateQuestion } from './RegenerateQuestion';
+import { GenerationError, regenerateQuestion } from '../lib/generate';
 import {
   blankQuestion,
   deleteQuestion as deleteQuestionRow,
@@ -54,6 +56,11 @@ export function QuizEditor() {
   const location = useLocation();
   const fromGenerator = location.state as { generated?: boolean; note?: string | null } | null;
   const [noticeSeen, setNoticeSeen] = useState(false);
+
+  // Which question, if any, the teacher is having written again.
+  const [regenerateFor, setRegenerateFor] = useState<string | null>(null);
+  const [regenerating, setRegenerating] = useState(false);
+  const [regenerateError, setRegenerateError] = useState<string | null>(null);
   const arrivedFromGenerator = fromGenerator?.generated === true && !noticeSeen;
   const generatorNote = fromGenerator?.note ?? null;
 
@@ -139,6 +146,31 @@ export function QuizEditor() {
     setTitle(next);
     pending.current.title = next;
     scheduleSave();
+  }
+
+  async function onRegenerate(question: Question, note: string) {
+    setRegenerating(true);
+    setRegenerateError(null);
+    try {
+      // The quiz title is the best description of the topic we have: for a
+      // generated quiz it was made from the teacher's own prompt.
+      const replacement = await regenerateQuestion({ topic: title, question, note });
+      // Everything `editQuestion` does except clearing the unread flag, which
+      // has to stay on: a question written again is one nobody has read.
+      setQuestions((current) =>
+        current.map((q) => (q.id === replacement.id ? replacement : q)),
+      );
+      pending.current.questions.set(replacement.id, replacement);
+      setProblems(null);
+      scheduleSave();
+      setRegenerateFor(null);
+    } catch (caught) {
+      setRegenerateError(
+        caught instanceof GenerationError ? caught.message : S.generate.unreachable,
+      );
+    } finally {
+      setRegenerating(false);
+    }
   }
 
   function editQuestion(next: Question) {
@@ -394,11 +426,25 @@ export function QuizEditor() {
           </div>
 
           {openQuestion ? (
-            <QuestionForm
-              key={openQuestion.id}
-              question={openQuestion}
-              onChange={editQuestion}
-            />
+            <div className="stack">
+              {regenerateFor === openQuestion.id && (
+                <RegenerateQuestion
+                  busy={regenerating}
+                  error={regenerateError}
+                  onCancel={() => setRegenerateFor(null)}
+                  onSubmit={(note) => void onRegenerate(openQuestion, note)}
+                />
+              )}
+              <QuestionForm
+                key={openQuestion.id}
+                question={openQuestion}
+                onRegenerate={() => {
+                  setRegenerateError(null);
+                  setRegenerateFor(openQuestion.id);
+                }}
+                onChange={editQuestion}
+              />
+            </div>
           ) : (
             <div className="empty-state">{S.editor.selectAQuestion}</div>
           )}

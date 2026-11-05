@@ -17,9 +17,12 @@ import { QUESTION_TYPES, type Question, type QuestionType } from '../lib/types';
 export function QuestionForm({
   question,
   onChange,
+  onRegenerate,
 }: {
   question: Question;
   onChange: (next: Question) => void;
+  /** Absent when generation is not set up, so the button simply is not there. */
+  onRegenerate?: () => void;
 }) {
   function patch(next: Partial<Question>) {
     onChange({ ...question, ...next });
@@ -35,7 +38,14 @@ export function QuestionForm({
     <div className="window">
       <div className="title-bar">
         <span>{S.editor.questionForm}</span>
-        <span className="tag">{S.types[question.type]}</span>
+        <span className="row-tight">
+          {onRegenerate && (
+            <button type="button" className="ghost" onClick={onRegenerate}>
+              {S.editor.regenerate}
+            </button>
+          )}
+          <span className="tag">{S.types[question.type]}</span>
+        </span>
       </div>
       <div className="body">
         <div className="row-tight">
