@@ -1,7 +1,10 @@
 # Generating quizzes with an LLM — the plan
 
 A design for turning a teacher's prompt into a quiz. Nothing here is built yet.
-Decisions marked **OPEN** need Ben's answer before the first line of code.
+
+Five of the six open decisions are settled (§6). The sixth — the daily cap —
+waits on step 0 of the build order, which is reading the real free-tier quota
+rather than trusting a published figure.
 
 This builds on `SPEC.md`; where it contradicts the spec, it says so.
 
@@ -39,7 +42,7 @@ So the feature needs somewhere server-side to hold the key.
 | Vercel Serverless Function | Would have to verify the Supabase JWT by hand | Workable, more glue |
 | Teacher pastes their own API key | Key still ends up in the browser; every teacher needs a billing account | No |
 
-**Recommendation: a Supabase Edge Function.**
+**Decided: a Supabase Edge Function.**
 
 The reasons are all about reusing what already works. The function receives the
 caller's Supabase JWT in the `Authorization` header, so it can check
@@ -239,19 +242,30 @@ set individual questions in the editor.
 
 ### Which types to allow by default
 
-**OPEN — needs a decision.** The honest position is that the six types are not
-equally generatable:
+**Decided: all six, from the start.** The six are not equally generatable:
 
 - `mc_single`, `true_false`, `short_text` — straightforward.
 - `mc_multi` — fine, but needs good distractors (§4.4).
 - `fill_blank`, `order_lines` — **the risky two.** Fiddly formats that models
-  get wrong in specific, predictable ways (§4.1, §4.2).
+  get wrong in specific, predictable ways (§4.1, §4.2), and a free Flash-tier
+  model will get them wrong more often than a paid one.
 
-Two defensible defaults: all six on, accepting more repair churn; or the four
-easy ones on with the risky two opt-in. My recommendation is **all six on**,
-because the repair loop exists precisely for this and the fill-blank format is
-a big part of what makes the app worth using — but it is a quality-versus-
-reliability call that belongs to Ben.
+Including them from day one is the right call — they are much of what makes
+ExitCode worth using over a generic quiz tool — but it moves work earlier
+rather than removing it. Three things stop being optional:
+
+- **The fixture tests in §5.8 become load-bearing**, particularly the
+  pre-shuffled `order_lines` case, which passes every automated check we have.
+- **The prompt rules in §4.1 and §4.2 are the feature**, not boilerplate. Worked
+  examples, not a sentence of description.
+- **Repair churn now costs quota** (§5.1), and these two types are what drives
+  it. If the quota turns out to be at the low end of the reported range, this
+  is the first thing to revisit.
+
+One piece of luck: the editor already labels the order-the-lines answer "Lines
+are in the CORRECT order here. Students see them shuffled." So the review
+surface for the silent failure exists — it just depends on the teacher reading
+it.
 
 ---
 
@@ -326,9 +340,17 @@ Two mitigations, neither complete:
 1. **The teacher reviews before hosting.** The editor is already the review
    surface and `validateQuizForHosting()` is already the gate. Generation
    should land the teacher *in the editor*, never host directly.
-2. **OPEN:** mark generated questions as unreviewed — a `generated_at` column,
-   cleared on first manual edit, with a badge in the question list. Makes
-   "which of these have I actually checked?" answerable. Costs a migration.
+2. **Decided: mark generated questions as unreviewed.** A `generated_at` column
+   on `questions`, cleared on the first manual edit, with a badge in the
+   question list. Makes "which of these have I actually checked?" answerable a
+   week later, which is exactly when a teacher comes back to a quiz they
+   generated in bulk. Costs a migration, and that migration is now bundled with
+   the one in §5.1.
+
+   Worth being clear about what this does and does not do. It tracks whether a
+   human *looked*, not whether the question is *right* — clearing on first edit
+   is a proxy, and a teacher who tweaks a typo clears the flag without checking
+   the answer. It is a memory aid, not a guarantee.
 
 Worth noting the existing hand-written quiz has a question whose lines print
 `0, 1, 2, 4` under a prompt asking for `0, 1, 2, 3, 4`. Human-authored. Review
@@ -447,10 +469,21 @@ the model to treat the teacher's topic text as subject matter, not instructions.
 
 ### 5.6 Language
 
-**OPEN.** `SPEC.md` rules out a Vietnamese *interface* for v1. Generated
-*content* is a separate question, and the classes are in Vietnam. Should the
-form offer a content language? Cheap to add now (one more field in the prompt),
-awkward to retrofit once teachers have quizzes.
+**Decided: English only for now.**
+
+`SPEC.md` rules out a Vietnamese *interface* for v1. Generated *content* was a
+separate question, since the classes are in Vietnam.
+
+An earlier draft of this plan called it "awkward to retrofit once teachers have
+quizzes". That was wrong, and the correction is why English-only is a safe
+choice rather than a closing door: **nothing stores a language.** It would be a
+generation-time prompt parameter and nothing more, so adding the field later
+costs a form field and a prompt line — the same as adding it now. No migration,
+no effect on existing quizzes.
+
+Nothing in the app blocks Vietnamese content today either: prompts are free
+text and the name rule already accepts any Unicode letter. So this is a
+scope decision for the first version, not a constraint on the design.
 
 ### 5.7 Where it lives in the UI
 
@@ -474,19 +507,30 @@ That keeps the test suite deterministic and offline, which is what the existing
 
 ---
 
-## 6. Decisions needed before building
+## 6. Decisions
 
-1. **Supabase Edge Function** as the server side — confirm, or prefer Vercel.
-2. ~~Model~~ — **decided: free only.** Recommendation is Gemini on a Flash
-   model, OpenRouter as fallback (§5.1). Confirm, then read the real quota in
-   AI Studio before anything else.
-3. **Default question types**: all six, or hold back `fill_blank` and
-   `order_lines` until their prompts are proven. A weaker free model makes
-   holding them back more attractive than it was.
-4. **Generated-question badge** (§4.7) — worth a migration, or not?
-5. **Content language** (§5.6) — English only for now, or a language field?
-6. **Daily cap** — a number, set below the provider's real limit, and now
-   shared across teachers rather than per-teacher (§5.1).
+Five of the six are settled.
+
+| # | Decision | Outcome |
+| --- | --- | --- |
+| 1 | Server side | **Supabase Edge Function** (§0) |
+| 2 | Model | **Free only** — Gemini on a Flash model, OpenRouter as fallback (§5.1) |
+| 3 | Default question types | **All six from the start** (§3) |
+| 4 | Generated-question flag | **Yes** — `generated_at`, cleared on first edit (§4.7) |
+| 5 | Content language | **English only for now** (§5.6) |
+| 6 | Daily cap | **Pending the quota reading** — see below |
+
+**Decision 6 cannot be made yet**, and guessing at it would be the one
+genuinely risky thing in this plan. The number has to sit under the provider's
+real limit, and the reported figures for Gemini Flash range from about 20
+requests a day to 1,500 (§5.1). A cap chosen against the wrong end of that
+range either throttles teachers who have quota to spare, or lets the project
+run dry before lunch.
+
+So the cap is set after step 0, from the number in AI Studio. Two things about
+it are already decided regardless: it is **shared across teachers**, because
+the quota is per project rather than per user, and exhausting it must produce a
+plain "generation is unavailable until tomorrow" rather than a raw 429.
 
 ---
 
@@ -497,7 +541,8 @@ That keeps the test suite deterministic and offline, which is what the existing
    against `responseSchema` with a throwaway script. An afternoon's work that
    decides whole-quiz versus per-question (§1) and the shape of the schema
    (§2.2).
-1. Migration: `generation_usage` (+ `generated_at` if decision 4 says yes).
+1. Migration `002`: `generation_usage` (global and per-teacher counters) and
+   `questions.generated_at`. One migration, both decisions.
 2. Edge Function skeleton: JWT → `is_allowed_teacher()` → quota check → 501.
    Deployable and testable before any model call.
 3. Zod → JSON Schema derivation, with tests.
