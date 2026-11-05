@@ -192,7 +192,16 @@ describe('import: the questions', () => {
 
   it('drops a stray language when there is no code block', () => {
     const result = parseQuizFile(
-      fileWith([{ ...goodQuestion, code: null, codeLanguage: 'python' }]),
+      fileWith([
+        {
+          ...goodQuestion,
+          // A prompt that does not point at code, because one that does is
+          // rejected outright when there is no code to point at.
+          prompt: 'Which of these is a Python list method?',
+          code: null,
+          codeLanguage: 'python',
+        },
+      ]),
     );
     expect(result.ok).toBe(true);
     expect(result.quiz?.questions[0].codeLanguage).toBeNull();

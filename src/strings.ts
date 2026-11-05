@@ -100,6 +100,8 @@ export const S = {
     questions: 'Questions',
     addQuestion: '+ Add question',
     gotIt: 'Got it',
+    markRead: 'Mark as read',
+    markReadTitle: "Clear the Unread badge. Use it when you have checked the question and it's right.",
     regenerate: 'Rewrite',
     regenerateHeading: 'Rewrite this question',
     regenerateNoteLabel: 'What should change? (optional)',

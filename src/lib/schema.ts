@@ -281,6 +281,50 @@ export const questionCommonSchema = z.object({
 export type QuestionCommon = z.infer<typeof questionCommonSchema>;
 
 /**
+ * Does the question text point at code that is not anywhere in the question?
+ *
+ * "What will this code print?" with no code block is unanswerable, and it is
+ * the way a generated question goes wrong most often: the model writes the
+ * text and then leaves out the snippet it was describing. Nothing else catches
+ * it — the question is schema-valid, it just cannot be answered.
+ *
+ * Only phrases that point at one specific listing count. "What does each step
+ * of the loop provide?" is a general question and is left alone; so is
+ * "What numbers does list(range(5, 1, -1)) produce?", which carries its code
+ * inline.
+ */
+function mentionsAbsentCode(question: {
+  type: QuestionType;
+  prompt: string;
+  code?: string | null;
+  content: Record<string, unknown>;
+}): boolean {
+  if (question.code !== null && question.code !== undefined && question.code.trim() !== '') {
+    return false;
+  }
+
+  // These two carry their code in the answer itself -- the snippet with blanks,
+  // and the lines to put in order.
+  if (question.type === 'fill_blank' || question.type === 'order_lines') return false;
+
+  // A multiple-choice question whose options are code is showing the code in
+  // the options: "which of the following loops is correct?"
+  const options = question.content.options;
+  if (
+    Array.isArray(options) &&
+    options.some((option) => (option as { kind?: string } | null)?.kind === 'code')
+  ) {
+    return false;
+  }
+
+  const prompt = question.prompt;
+  const pointsAtAListing = /\b(this|the following|the above)\s+(code|loop|program|snippet|script|function|example)\b/i;
+  const asksAboutThis = /\bwhat\s+(does|will|is)\s+this\b/i;
+
+  return pointsAtAListing.test(prompt) || asksAboutThis.test(prompt);
+}
+
+/**
  * Every problem with one question, as sentences that can follow
  * "Question 3: ". Empty array means the question is ready to host.
  */
@@ -314,6 +358,10 @@ export function checkQuestion(question: {
     if (!question.codeLanguage) {
       problems.push('the code block has no language');
     }
+  }
+
+  if (mentionsAbsentCode(question)) {
+    problems.push('the question text refers to code, but there is no code to look at');
   }
 
   if (question.timingMode === 'timed') {
