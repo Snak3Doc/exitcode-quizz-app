@@ -29,7 +29,8 @@
 type GeminiType = 'STRING' | 'INTEGER' | 'BOOLEAN' | 'ARRAY' | 'OBJECT';
 
 export interface GeminiSchema {
-  type: GeminiType;
+  /** Optional only on an `anyOf` branch point, which carries no type of its own. */
+  type?: GeminiType;
   description?: string;
   enum?: string[];
   items?: GeminiSchema;
@@ -39,6 +40,8 @@ export interface GeminiSchema {
   maxItems?: number;
   /** Gemini-specific: fixes the order fields are generated in. */
   propertyOrdering?: string[];
+  /** A union of shapes. Confirmed working by the spike on 2026-11-05. */
+  anyOf?: GeminiSchema[];
 }
 
 // These are duplicated from the app on purpose (see the header). The test
@@ -263,7 +266,69 @@ export function questionSchemaFor(type: string): GeminiSchema {
 }
 
 /**
- * Timing is not in this schema on purpose. It is the teacher's choice in the
+ * A whole quiz in one response.
+ *
+ * The spike (2026-11-05) confirmed Gemini handles `anyOf` over the six content
+ * shapes and fills each one in correctly against its sibling `type`, so a quiz
+ * costs one request rather than one per question. That matters on a free tier
+ * counted in requests.
+ *
+ * `type` sits beside `content` so the converter knows which shape it is
+ * looking at. Without it the caller would have to assume the model returned
+ * the question types in the order they were asked for, which nothing
+ * guarantees.
+ */
+export function quizSchemaFor(types: readonly string[]): GeminiSchema {
+  const distinct = [...new Set(types)];
+  if (distinct.length === 0) throw new Error('A quiz needs at least one question type.');
+
+  return {
+    type: 'OBJECT',
+    required: ['questions'],
+    properties: {
+      questions: {
+        type: 'ARRAY',
+        minItems: 1,
+        description:
+          'The questions, in the order a class should meet them: easier first, ' +
+          'building up. Do not repeat the same example or idea twice.',
+        items: {
+          type: 'OBJECT',
+          propertyOrdering: ['type', 'prompt', 'code', 'codeLanguage', 'explanation', 'content'],
+          required: ['type', 'prompt', 'explanation', 'content'],
+          properties: {
+            type: {
+              type: 'STRING',
+              enum: distinct,
+              description: 'Which kind of question this is. `content` must match it.',
+            },
+            prompt: {
+              type: 'STRING',
+              description: 'The question as the class reads it on the projector. One or two lines.',
+            },
+            code: {
+              type: 'STRING',
+              description:
+                'An optional code block shown above the question. Leave it out unless the ' +
+                'question is about this specific code.',
+            },
+            codeLanguage: language,
+            explanation: {
+              type: 'STRING',
+              description: 'Why the answer is right. Students read this after the question closes.',
+            },
+            content: {
+              anyOf: distinct.map((type) => contentSchemaFor(type)),
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Timing is not in either schema on purpose. It is the teacher's choice in the
  * form, not the model's — the speed bonus only applies to timed questions, so
  * letting the model pick quietly changes how the whole quiz scores.
  */

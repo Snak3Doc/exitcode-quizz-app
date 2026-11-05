@@ -495,3 +495,68 @@ describe('real output from the model', () => {
     ]);
   });
 });
+
+/**
+ * A second capture, 2026-11-05, this time through the real prompts and the
+ * whole-quiz schema the Edge Function uses (`scripts/try-generation.ts`).
+ *
+ * This one matters more than the first: it covers the two types the plan calls
+ * risky. The fill_blank came back with contiguous blank numbers, every answer
+ * present in the word bank and four spare words, and the order_lines came back
+ * in the correct order with the indentation intact — the three things §4 says
+ * a model gets wrong.
+ */
+const realGeminiRiskyTypes = {
+  questions: [
+    {
+      type: 'fill_blank',
+      prompt: 'Complete the code to print the odd numbers 1, 3, and 5.',
+      explanation:
+        'The range function takes start, stop, and step arguments. range(1, 6, 2) starts at 1, stops before 6, and steps by 2 each time.',
+      content: {
+        language: 'python',
+        snippet: 'for number in {{1}}(1, 6, {{2}}):',
+        wordBank: ['range', '2', '1', '3', 'len', 'loop'],
+        answers: [
+          { blank: 1, word: 'range' },
+          { blank: 2, word: '2' },
+        ],
+      },
+    },
+    {
+      type: 'order_lines',
+      prompt:
+        'Arrange the lines in order to calculate and print the total sum of numbers from 1 to 5.',
+      explanation:
+        'First set total to 0. Then loop through numbers 1 to 5 using range(1, 6). Inside the loop, add i to total. Finally, print total after the loop ends.',
+      content: {
+        language: 'python',
+        lines: ['total = 0', 'for i in range(1, 6):', '    total = total + i', 'print(total)'],
+      },
+    },
+  ],
+};
+
+describe('real output for the two risky types', () => {
+  const types = realGeminiRiskyTypes.questions.map((q) => q.type as QuestionType);
+
+  it('converts into questions that are ready to host', () => {
+    const outcome = normaliseBatch(types, realGeminiRiskyTypes.questions, untimed);
+    expect(outcome.dropped).toEqual([]);
+    expect(outcome.kept).toHaveLength(2);
+    for (const question of outcome.kept) {
+      expect(checkQuestion(question)).toEqual([]);
+    }
+  });
+
+  it('rebuilds the blank answers as a map keyed by blank number', () => {
+    const outcome = normaliseBatch(types, realGeminiRiskyTypes.questions, untimed);
+    expect(outcome.kept[0].content.answers).toEqual({ '1': 'range', '2': '2' });
+  });
+
+  it('keeps the indentation that makes the Python line correct', () => {
+    const outcome = normaliseBatch(types, realGeminiRiskyTypes.questions, untimed);
+    const lines = outcome.kept[1].content.lines as { text: string }[];
+    expect(lines[2].text).toBe('    total = total + i');
+  });
+});
