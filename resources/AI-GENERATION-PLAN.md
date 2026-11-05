@@ -17,10 +17,17 @@ or teacher's browser. Vite inlines `VITE_*` variables into the bundle at build
 time — that is exactly why the Supabase anon key works the way it does, and why
 changing it on Vercel needs a redeploy.
 
-An Anthropic API key cannot go there. `VITE_ANTHROPIC_API_KEY` would be sitting
-in plain text in `assets/index-*.js`, readable by anyone who opens the site,
-including every student in the room. They would be spending Ben's money within
-a day.
+An LLM API key cannot go there. `VITE_GEMINI_API_KEY` would be sitting in plain
+text in `assets/index-*.js`, readable by anyone who opens the site, including
+every student in the room.
+
+**A free key does not make this safe — it makes it worse.** The instinct is
+that a leaked free key costs nothing, so who cares. But the free tier's limit
+is a few hundred requests a day for the whole project (§5.1), and a scraped key
+is found by bots within hours. The first teacher to try generating a quiz
+before a lesson would find the day's quota already spent by strangers, with no
+way to tell why. On a paid key the damage is a bill you can cap; on a free key
+it is a tool that silently stops working.
 
 So the feature needs somewhere server-side to hold the key.
 
@@ -96,24 +103,33 @@ It is more moving parts, so it is not the thing to build first. Noted here so
 the first design does not paint us into a corner: keeping generation
 per-question-addressable from day one is what preserves this option.
 
+**This is no longer purely a quality question.** Two findings in §2.2 and §5.1
+may force per-question generation whatever we would have preferred: the
+six-way union may not express in the provider's schema dialect, and
+per-question calls make each one flat and simple. Pulling the other way, free
+tiers are capped in **requests**, and ten questions becomes ten requests
+instead of one. Whichever way that resolves, it resolves from the spike in
+§5.1 — not from taste.
+
 ---
 
 ## 2. Getting a usable shape back
 
-### 2.1 Use structured outputs, not "please reply in JSON"
+### 2.1 Constrain the output with a schema, don't ask for JSON in prose
 
-The Messages API can constrain the response to a JSON Schema via
-`output_config: { format: ... }`. That is the mechanism to use. Asking for JSON
-in the prompt and parsing what comes back is the thing people did before this
-existed, and it fails in the ways you would expect.
+Whichever provider we land on, the mechanism is the same in principle: hand the
+API a schema and have it constrain generation, rather than writing "reply in
+JSON" in the prompt and parsing whatever arrives.
 
-Two notes on current API behaviour, both easy to get wrong from memory:
+On the **Gemini API** that is `responseMimeType: "application/json"` plus
+`responseSchema` on the generation config. On **OpenRouter** it is the
+OpenAI-style `response_format` with a JSON Schema — but support is
+**per-model**, not universal, so a free model has to be checked for it before
+being chosen (§5.1).
 
-- It is `output_config.format`. The older top-level `output_format` parameter
-  is deprecated.
-- Forcing a tool call (`tool_choice: {type: "any"}`) returns a **400** on
-  Claude Opus 5.5. The old "define a tool and force it to get JSON" trick is
-  gone. Structured outputs is the replacement.
+Asking for JSON in the prompt is the fallback if neither is available for the
+model we end up on, and it is a meaningfully worse fallback: it moves the whole
+burden onto the validate-and-repair loop in §2.3.
 
 ### 2.2 Derive the schema from the Zod schema we already have
 
@@ -130,6 +146,19 @@ The shape to generate is the existing `.quiz.json` envelope from
 `src/lib/quiz-file.ts` — `QuizFile` without `format` and `version`, which the
 server fills in. This means generated quizzes travel the same path as imported
 ones, and the import tests already cover most of it.
+
+**The union problem.** A quiz is an array of questions, and a question is a
+discriminated union of six different `content` shapes. That is the hardest
+thing to express in a constrained-decoding schema, and the schema dialects
+these APIs accept are subsets of JSON Schema with their own limits on `anyOf`
+and discriminators.
+
+This needs a spike before anything is built on it, because it has a large
+consequence (§1): if the union will not express cleanly, generating **one
+question at a time with its type fixed per call** sidesteps the problem
+entirely — each call then has a single, flat schema. The fallback if even that
+disappoints is to flatten the schema with every type-specific field optional
+and let `checkQuestion()` do the real work.
 
 ### 2.3 Structured output is not enough — validate, then repair
 
@@ -309,27 +338,69 @@ matters either way; this feature just makes more questions arrive at once.
 
 ## 5. Everything else that will bite
 
-### 5.1 Cost and abuse
+### 5.1 Quota, not cost
 
-Approved teachers only, but an approved teacher with a stuck loop still spends
-real money. Needed:
+**Decided: this stays a free tool.** So the scarce resource is not money, it is
+**requests per day**, and that changes the shape of the problem. A paid API
+degrades gracefully as you use more of it; a free tier stops dead.
 
-- A per-teacher daily cap, counted in a `generation_usage` table with RLS so a
-  teacher can only see their own row.
+#### The two candidates
+
+| | Gemini API (Google AI Studio) | OpenRouter free models |
+| --- | --- | --- |
+| Schema-constrained output | First-class: `responseSchema` | **Per-model** — must be checked |
+| Free request cap | Per-project, published only in the AI Studio console | Officially 20/min and **50/day**, rising to 1,000/day after $10 of credit |
+| Model stability | Pick a model, it stays | Free list **rotates**; models come and go |
+| Failure mode | Quota exhausted | 429s from provider-side throttling at peak, and failed calls may still count |
+
+**Recommendation: Gemini, on a Flash model**, with OpenRouter as the fallback.
+Three reasons: schema-constrained output is documented and first-class rather
+than per-model roulette, the free allowance appears materially larger, and the
+model does not vanish from under us mid-term. A classroom tool that breaks
+because a free model was delisted is worse than one that was never built.
+
+#### The numbers are not trustworthy yet
+
+This matters more than the recommendation. Google does not publish the free
+tier's limits as a table in its API docs — they are per-project and shown in
+AI Studio's own rate-limit page. Third-party write-ups for Flash models
+disagree wildly, from about 20 requests a day to 1,500, and at least one report
+has a project linked to billing staying pinned at the low end.
+
+**So step one is to open AI Studio and read the actual limit for the actual
+project.** Everything below depends on that number and nothing should be built
+on a blog's figure.
+
+#### What the cap does to the design
+
+Once the real number is known, it decides things the plan currently leaves
+open:
+
+- **Whole-quiz versus per-question (§1).** At one request per quiz, almost any
+  cap works. At ten requests per quiz, a 50/day cap is five quizzes a day for
+  *everyone combined*.
+- **The app-level daily cap** must sit below the provider's, and be shared
+  across teachers rather than per-teacher, because the quota is per *project*,
+  not per user. The `generation_usage` table should therefore count globally as
+  well as per teacher, so one enthusiastic colleague cannot exhaust the day for
+  the rest.
+- **Repair retries cost quota too.** The one-retry cap from §2.3 stops being a
+  cost control and becomes a quota control.
+
+Still needed regardless:
+
 - A per-request question cap well below the schema's 50. **20 is a sensible
-  ceiling** — beyond that the response is long enough to be slow and the
-  failure expensive.
-- The one-retry repair cap from §2.3.
+  ceiling.**
+- Graceful behaviour when the quota is gone: a plain "generation is unavailable
+  until tomorrow" message, never a raw 429. The teacher can still build quizzes
+  by hand, which is the whole existing app.
 
-Rough cost per 10-question quiz, from current pricing: around **2k input and 4k
-output tokens**, so roughly **$0.10** on Claude Opus 5.5 ($4/$20 per MTok). On
-Claude Sonnet 5.5 ($2/$10) it is about half that; on Claude Haiku 5.5
-($0.10/$0.50) about a fiftieth.
+#### One thing to check before committing
 
-**OPEN:** model choice. The default is `claude-opus-5-5` and the quality
-difference shows up exactly in the fiddly formats of §4.1 and §4.2 and in not
-being wrong about what code prints. Dropping to a cheaper model is a real
-option and a real tradeoff, and it is Ben's call, not mine.
+Free tiers often differ from paid ones in how submitted data may be used. For a
+teacher typing "year 9 Python loops" the stakes are low, but this is a school
+tool, so it is worth reading the current terms rather than assuming. **Not
+verified here.**
 
 ### 5.2 Latency
 
@@ -406,27 +477,36 @@ That keeps the test suite deterministic and offline, which is what the existing
 ## 6. Decisions needed before building
 
 1. **Supabase Edge Function** as the server side — confirm, or prefer Vercel.
-2. **Model**: `claude-opus-5-5` (~$0.10/quiz) or a cheaper tier, accepting more
-   repair churn on the fiddly types.
+2. ~~Model~~ — **decided: free only.** Recommendation is Gemini on a Flash
+   model, OpenRouter as fallback (§5.1). Confirm, then read the real quota in
+   AI Studio before anything else.
 3. **Default question types**: all six, or hold back `fill_blank` and
-   `order_lines` until their prompts are proven.
+   `order_lines` until their prompts are proven. A weaker free model makes
+   holding them back more attractive than it was.
 4. **Generated-question badge** (§4.7) — worth a migration, or not?
 5. **Content language** (§5.6) — English only for now, or a language field?
-6. **Daily cap per teacher** — a number.
+6. **Daily cap** — a number, set below the provider's real limit, and now
+   shared across teachers rather than per-teacher (§5.1).
 
 ---
 
 ## 7. Build order, once those are settled
 
+0. **The spike**, before anything else, because two open design questions hang
+   on it: read the project's real quota in AI Studio, and try the six-way union
+   against `responseSchema` with a throwaway script. An afternoon's work that
+   decides whole-quiz versus per-question (§1) and the shape of the schema
+   (§2.2).
 1. Migration: `generation_usage` (+ `generated_at` if decision 4 says yes).
-2. Edge Function skeleton: JWT → `is_allowed_teacher()` → rate-limit check →
-   501. Deployable and testable before any model call.
+2. Edge Function skeleton: JWT → `is_allowed_teacher()` → quota check → 501.
+   Deployable and testable before any model call.
 3. Zod → JSON Schema derivation, with tests.
-4. The generation call, with structured outputs and streaming.
+4. The generation call, schema-constrained and streamed.
 5. Validate-and-repair, with fixture tests.
 6. The form on My quizzes, and the handoff into the editor.
 7. Per-question **Regenerate** in the editor.
 8. README: the new setup step.
 
-Steps 1–3 are worth doing first and merging on their own — they are the parts
+Step 0 is cheap and changes what the rest looks like, so it comes first.
+Steps 1–3 are worth doing next and merging on their own — they are the parts
 with no API dependency and the parts that tests can actually cover.
