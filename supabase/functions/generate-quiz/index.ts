@@ -1,14 +1,15 @@
 /**
  * generate-quiz — turns a teacher's prompt into a draft quiz.
  *
- * This is the shell: transport, authentication and the approved-teacher check.
- * The generation itself is not written yet and the function answers 501 once a
- * caller has got past the gate.
+ * Transport, authentication, the approved-teacher check, and the call to
+ * Gemini. It returns the model's questions untouched: converting and
+ * validating them happens in the browser, where `checkQuestion()` already
+ * judges imported questions, so generated ones meet the same bar by the same
+ * code rather than a second copy of it.
  *
- * It exists as its own deployable piece on purpose. Everything here can be
- * tested against the real project with curl, without an LLM key and without
- * spending any quota, and getting it wrong is how a public endpoint ends up
- * generating quizzes for strangers.
+ * The auth gate comes first and is worth keeping that way — getting it wrong
+ * is how a public endpoint ends up generating quizzes for strangers on
+ * someone else's quota.
  *
  * Runs on Deno, not in the browser bundle. `tsconfig.app.json` only includes
  * `src`, so the app's typecheck never sees this file.
@@ -19,20 +20,31 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
+import { DEFAULT_MODELS, generateQuiz } from './gemini.ts';
+import { buildSystemPrompt, buildUserPrompt } from './prompt.ts';
+import { checkRequest, type GenerateRequest } from './request.ts';
+import { quizSchemaFor } from './schema.ts';
 
 /**
  * Every failure answers with this shape. `code` is for the app to branch on,
  * `message` is a readable fallback for curl and for logs — the app has its own
  * wording in `src/strings.ts` and should prefer it.
  *
- * Codes: method_not_allowed, unauthenticated, not_approved,
- * server_misconfigured, not_implemented. `quota_exhausted` joins them once
- * generation lands: when Gemini's free tier is spent the teacher is told to
- * try tomorrow or build the quiz by hand.
+ * Codes, and what the app should do with each:
  *
- * server_misconfigured is the operator's problem rather than the teacher's —
- * the app should say so plainly instead of folding it into a generic failure,
- * or a missing environment variable is very hard to recognise from the UI.
+ *   method_not_allowed    a bug in the caller
+ *   unauthenticated       send the teacher back to sign in
+ *   not_approved          this account is not on the allowed list
+ *   bad_request           the form let through something it should not have
+ *   quota_exhausted       busy, rate limited or out of quota -- try later, or
+ *                         build the quiz by hand, which is the whole app as it
+ *                         already exists
+ *   generation_failed     the model answered with something unusable; the
+ *                         detail is in the function logs, not on screen
+ *   server_misconfigured  the operator's problem, not the teacher's. Say so
+ *                         plainly rather than folding it into a generic
+ *                         failure, or a missing secret is very hard to
+ *                         recognise from the UI.
  */
 interface ErrorBody {
   error: { code: string; message: string };
@@ -111,9 +123,50 @@ Deno.serve(async (request: Request): Promise<Response> => {
     return fail('not_approved', 'This account is not an approved teacher.', 403);
   }
 
-  return fail(
-    'not_implemented',
-    'Quiz generation is not built yet.',
-    501,
-  );
+  const geminiKey = Deno.env.get('GEMINI_API_KEY');
+  if (!geminiKey) {
+    console.error('GEMINI_API_KEY is missing. Run: supabase secrets set GEMINI_API_KEY=...');
+    return fail('server_misconfigured', 'The server is not set up correctly.', 500);
+  }
+
+  let body: GenerateRequest;
+  try {
+    body = (await request.json()) as GenerateRequest;
+  } catch {
+    return fail('bad_request', 'Send a JSON body.', 400);
+  }
+
+  const problem = checkRequest(body);
+  if (problem) return fail('bad_request', problem, 400);
+
+  const types = [...new Set(body.types)];
+
+  const result = await generateQuiz({
+    apiKey: geminiKey,
+    models: DEFAULT_MODELS,
+    systemPrompt: buildSystemPrompt(types),
+    userPrompt: buildUserPrompt({ topic: body.topic.trim(), count: body.count, types }),
+    responseSchema: quizSchemaFor(types),
+  });
+
+  if (!result.ok) {
+    const { failure } = result;
+    if (failure.kind === 'unavailable') {
+      // Busy, rate limited or out of quota -- all the same to the teacher, who
+      // can try later or build the quiz by hand as they always could.
+      console.warn('Gemini unavailable:', failure.detail);
+      return fail('quota_exhausted', 'Generation is unavailable right now.', 503);
+    }
+    // A rejected request or unreadable output is our bug, not the teacher's,
+    // and the detail belongs in the logs rather than on their screen.
+    console.error('Generation failed:', JSON.stringify(failure));
+    return fail('generation_failed', 'Generation did not work this time.', 502);
+  }
+
+  console.log(`Generated ${result.questions.length} question(s) with ${result.model}.`);
+
+  // The questions go back raw. Converting and validating them happens in the
+  // browser, where `checkQuestion()` already judges imported questions, so
+  // generated ones are held to exactly the same standard by the same code.
+  return json({ model: result.model, questions: result.questions }, 200);
 });
