@@ -12,9 +12,13 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  applyRepairs,
   normaliseBatch,
   normaliseContent,
   normaliseQuestion,
+  normaliseSlots,
+  repairable,
+  summarise,
   type GeneratedQuestion,
 } from './generation';
 import { checkQuestion } from './schema';
@@ -598,5 +602,115 @@ describe('real output carrying a code block', () => {
     const { question } = normaliseQuestion('mc_single', realGeminiWithCode, untimed);
     expect(question.code?.split('\n')).toHaveLength(4);
     expect(question.code?.split('\n')[2]).toBe('    count = count + 1');
+  });
+});
+
+// ---------- the repair pass ----------
+
+describe('repairing what came back unusable', () => {
+  const goodTrueFalse: GeneratedQuestion = {
+    prompt: 'Python lists are ordered.',
+    content: { correct: true },
+  };
+  /** Two correct answers on a single-answer question. */
+  const badSingle: GeneratedQuestion = {
+    prompt: 'Which is a list method?',
+    content: {
+      options: [
+        { kind: 'text', text: 'append()', correct: true },
+        { kind: 'text', text: 'pop()', correct: true },
+      ],
+    },
+  };
+  const fixedSingle: GeneratedQuestion = {
+    prompt: 'Which is a list method?',
+    content: {
+      options: [
+        { kind: 'text', text: 'append()', correct: true },
+        { kind: 'text', text: 'push()', correct: false },
+      ],
+    },
+  };
+
+  it('keeps each result in the position it was asked for', () => {
+    const slots = normaliseSlots(['true_false', 'mc_single'], [goodTrueFalse, badSingle], untimed);
+    expect(slots[0].ok).toBe(true);
+    expect(slots[1].ok).toBe(false);
+  });
+
+  it('offers only the failures a replacement could be asked for', () => {
+    const slots = normaliseSlots(['true_false', 'mc_single'], [goodTrueFalse, badSingle], untimed);
+    const failures = repairable(slots);
+    expect(failures).toHaveLength(1);
+    expect(failures[0].type).toBe('mc_single');
+    // The attempt goes back with it, so the model fixes rather than rerolls.
+    expect(failures[0].raw).toBe(badSingle);
+    expect(failures[0].problems.length).toBeGreaterThan(0);
+  });
+
+  it('puts a repaired question back where the original was', () => {
+    // Not at the end. The model is told to order a quiz so it builds up, and
+    // appending every repair would throw that away for nothing.
+    const slots = normaliseSlots(['mc_single', 'true_false'], [badSingle, goodTrueFalse], untimed);
+    const after = applyRepairs(slots, [fixedSingle], untimed);
+
+    expect(after[0].ok).toBe(true);
+    expect(summarise(after).kept[0].type).toBe('mc_single');
+    expect(summarise(after).dropped).toEqual([]);
+  });
+
+  it('leaves a slot failed when the replacement is wrong too', () => {
+    const slots = normaliseSlots(['mc_single'], [badSingle], untimed);
+    const after = applyRepairs(slots, [badSingle], untimed);
+
+    expect(after[0].ok).toBe(false);
+    expect(summarise(after).dropped).toHaveLength(1);
+  });
+
+  it('does not disturb the questions that were already fine', () => {
+    const slots = normaliseSlots(
+      ['true_false', 'mc_single', 'true_false'],
+      [goodTrueFalse, badSingle, goodTrueFalse],
+      untimed,
+    );
+    const after = applyRepairs(slots, [fixedSingle], untimed);
+
+    expect(summarise(after).kept).toHaveLength(3);
+    expect(after[0]).toBe(slots[0]);
+    expect(after[2]).toBe(slots[2]);
+  });
+
+  it('copes with fewer replacements than were asked for', () => {
+    const slots = normaliseSlots(['mc_single', 'mc_single'], [badSingle, badSingle], untimed);
+    const after = applyRepairs(slots, [fixedSingle], untimed);
+
+    expect(summarise(after).kept).toHaveLength(1);
+    expect(summarise(after).dropped).toHaveLength(1);
+  });
+
+  it('copes with no replacements at all', () => {
+    // A failed repair is not an error in itself: the originals stand and are
+    // reported as dropped, exactly as they would have been without it.
+    const slots = normaliseSlots(['mc_single'], [badSingle], untimed);
+    const after = applyRepairs(slots, [], untimed);
+    expect(summarise(after)).toEqual(summarise(slots));
+  });
+
+  it('cannot repair a question the model invented', () => {
+    // An extra question has no type that was asked for, so there is nothing to
+    // ask for again.
+    const slots = normaliseSlots(['true_false'], [goodTrueFalse, badSingle], untimed);
+    expect(slots).toHaveLength(2);
+    expect(repairable(slots)).toEqual([]);
+  });
+
+  it('can repair a question the model never returned', () => {
+    const slots = normaliseSlots(['true_false', 'mc_single'], [goodTrueFalse], untimed);
+    const failures = repairable(slots);
+    expect(failures).toHaveLength(1);
+    expect(failures[0].raw).toBeNull();
+
+    const after = applyRepairs(slots, [fixedSingle], untimed);
+    expect(summarise(after).kept).toHaveLength(2);
   });
 });

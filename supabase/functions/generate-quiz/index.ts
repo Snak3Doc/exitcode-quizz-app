@@ -21,8 +21,8 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { DEFAULT_MODELS, generateQuiz } from './gemini.ts';
-import { buildSystemPrompt, buildUserPrompt } from './prompt.ts';
-import { checkRequest, type GenerateRequest } from './request.ts';
+import { buildRepairPrompt, buildSystemPrompt, buildUserPrompt } from './prompt.ts';
+import { checkRequest, isRepair, type GenerateRequest } from './request.ts';
 import { quizSchemaFor } from './schema.ts';
 
 /**
@@ -129,9 +129,9 @@ Deno.serve(async (request: Request): Promise<Response> => {
     return fail('server_misconfigured', 'The server is not set up correctly.', 500);
   }
 
-  let body: GenerateRequest;
+  let body: unknown;
   try {
-    body = (await request.json()) as GenerateRequest;
+    body = await request.json();
   } catch {
     return fail('bad_request', 'Send a JSON body.', 400);
   }
@@ -139,13 +139,22 @@ Deno.serve(async (request: Request): Promise<Response> => {
   const problem = checkRequest(body);
   if (problem) return fail('bad_request', problem, 400);
 
-  const types = [...new Set(body.types)];
+  // A repair asks for replacements for questions that came back unusable. It
+  // shares the schema and the system prompt with a fresh quiz -- only what is
+  // asked for differs -- so the answers travel the same path home.
+  const repairing = isRepair(body);
+  const topic = (repairing ? body.topic : (body as GenerateRequest).topic).trim();
+  const types = repairing
+    ? [...new Set(body.repair.map((entry) => entry.type))]
+    : [...new Set((body as GenerateRequest).types)];
 
   const result = await generateQuiz({
     apiKey: geminiKey,
     models: DEFAULT_MODELS,
     systemPrompt: buildSystemPrompt(types),
-    userPrompt: buildUserPrompt({ topic: body.topic.trim(), count: body.count, types }),
+    userPrompt: repairing
+      ? buildRepairPrompt(topic, body.repair)
+      : buildUserPrompt({ topic, count: (body as GenerateRequest).count, types }),
     responseSchema: quizSchemaFor(types),
   });
 
