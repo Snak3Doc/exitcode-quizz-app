@@ -948,3 +948,17 @@ select.blank {
 .points .bonus {
   color: var(--amber);
 }
+
+/* ---------- the way in for teachers, under the join form ---------- */
+
+.teacher-link {
+  color: var(--fg-dim);
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+
+.teacher-link:hover,
+.teacher-link:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+}

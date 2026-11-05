@@ -154,6 +154,7 @@ export const S = {
       "A name can use letters, numbers, spaces and . , ' - _ ! and must be 1 to 20 characters.",
     missingCode: 'Enter the game code.',
     missingName: 'Enter your name.',
+    teacherSignIn: 'Sign in as teacher',
   },
 
   // ---------- Student: in game ----------

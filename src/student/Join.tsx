@@ -1,7 +1,7 @@
 /** The home page: a game code and a name. No account, no sign-in. SPEC 3.7. */
 
 import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { S } from '../strings';
 import { isValidName, normaliseName, normaliseShareCode } from '../lib/game-logic';
 import { MAX_NAME_LENGTH, SHARE_CODE_LENGTH } from '../lib/constants';
@@ -97,6 +97,14 @@ export function Join() {
           )}
         </div>
       </form>
+
+      {/*
+        Teachers reach their own screens from here. Only approved emails can
+        read or write anything, so showing the way in costs nothing.
+      */}
+      <Link className="teacher-link" to="/teacher">
+        {S.join.teacherSignIn}
+      </Link>
     </main>
   );
 }
