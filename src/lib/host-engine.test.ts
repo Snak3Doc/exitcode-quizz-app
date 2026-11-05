@@ -23,6 +23,7 @@ function question(
     timeLimitSeconds: null,
     explanation: null,
     content,
+    generatedAt: null,
     ...extra,
   };
 }

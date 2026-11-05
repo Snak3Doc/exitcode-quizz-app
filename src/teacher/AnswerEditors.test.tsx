@@ -274,6 +274,7 @@ function renderForm(initial: Partial<Question> = {}) {
     timeLimitSeconds: null,
     explanation: null,
     content: defaultContent(initial.type ?? 'mc_single'),
+    generatedAt: null,
     ...initial,
   };
   const latest = { question: base };

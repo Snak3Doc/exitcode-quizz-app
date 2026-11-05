@@ -48,6 +48,7 @@ describe('export', () => {
           timeLimitSeconds: 20,
           explanation: null,
           content: { correct: true },
+          generatedAt: null,
         },
       ],
     };

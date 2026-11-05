@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   DndContext,
   KeyboardSensor,
@@ -48,6 +48,14 @@ type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 export function QuizEditor() {
   const { quizId = '' } = useParams();
   const navigate = useNavigate();
+
+  // Set when the generator sent us here, so the teacher is told plainly that
+  // these are a draft before they read them.
+  const location = useLocation();
+  const fromGenerator = location.state as { generated?: boolean; note?: string | null } | null;
+  const [noticeSeen, setNoticeSeen] = useState(false);
+  const arrivedFromGenerator = fromGenerator?.generated === true && !noticeSeen;
+  const generatorNote = fromGenerator?.note ?? null;
 
   const [title, setTitle] = useState('');
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -286,6 +294,18 @@ export function QuizEditor() {
       />
 
       <div className="container stack-lg">
+        {arrivedFromGenerator && (
+          <div className="banner">
+            <strong>{S.generate.draftNotice}</strong>
+            {generatorNote && <p>{generatorNote}</p>}
+            <div>
+              <button type="button" className="ghost" onClick={() => setNoticeSeen(true)}>
+                {S.editor.gotIt}
+              </button>
+            </div>
+          </div>
+        )}
+
         {problems && (
           <div className="banner">
             <strong>{S.editor.problemsHeading}</strong>
@@ -453,8 +473,14 @@ function QuestionRow({
         >
           {index + 1}. {preview}
         </div>
-        <div>
+        <div className="row-tight">
           <span className="tag">{S.types[question.type]}</span>
+          {/* Nobody has read this one yet. Clears the moment it is edited. */}
+          {question.generatedAt !== null && (
+            <span className="badge-generated" title={S.editor.unreviewedTitle}>
+              {S.editor.unreviewed}
+            </span>
+          )}
         </div>
       </button>
 

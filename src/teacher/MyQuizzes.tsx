@@ -16,6 +16,8 @@ import {
 import { buildQuizFile, parseQuizFile, quizFileName } from '../lib/quiz-file';
 import { validateQuizForHosting, type HostingProblem } from '../lib/schema';
 import { MAX_IMPORT_BYTES } from '../lib/constants';
+import { GenerationError, generateQuiz } from '../lib/generate';
+import { GenerateQuiz, type GenerateChoices } from './GenerateQuiz';
 import type { QuizSummary } from '../lib/types';
 
 export function MyQuizzes() {
@@ -29,6 +31,9 @@ export function MyQuizzes() {
     problems: HostingProblem[];
   } | null>(null);
   const [importProblems, setImportProblems] = useState<string[] | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [generatingNow, setGeneratingNow] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
@@ -62,6 +67,33 @@ export function MyQuizzes() {
       const id = await createQuiz();
       navigate(`/teacher/quiz/${id}`);
     });
+  }
+
+  async function onGenerate(choices: GenerateChoices) {
+    setGeneratingNow(true);
+    setGenerateError(null);
+    try {
+      const outcome = await generateQuiz(choices);
+      // Straight into the editor. A generated quiz is a draft, and the editor
+      // is where it gets read -- hosting it unread is the thing to avoid.
+      navigate(`/teacher/quiz/${outcome.quizId}`, {
+        state: {
+          generated: true,
+          note:
+            outcome.dropped.length > 0
+              ? S.generate.droppedSome(outcome.kept, outcome.dropped.length)
+              : null,
+        },
+      });
+    } catch (caught) {
+      // GenerationError already carries wording meant for a teacher; anything
+      // else is a surprise and gets the generic line.
+      setGenerateError(
+        caught instanceof GenerationError ? caught.message : S.generate.unreachable,
+      );
+    } finally {
+      setGeneratingNow(false);
+    }
   }
 
   function onDuplicate(quizId: string) {
@@ -132,6 +164,16 @@ export function MyQuizzes() {
             </button>
             <button
               type="button"
+              onClick={() => {
+                setGenerateError(null);
+                setGenerating(true);
+              }}
+              disabled={busy}
+            >
+              {S.quizzes.generate}
+            </button>
+            <button
+              type="button"
               onClick={() => fileInput.current?.click()}
               disabled={busy}
             >
@@ -152,6 +194,17 @@ export function MyQuizzes() {
         </div>
 
         {error && <div className="banner error">{error}</div>}
+
+        {generating && (
+          <div className="narrow">
+            <GenerateQuiz
+              busy={generatingNow}
+              error={generateError}
+              onCancel={() => setGenerating(false)}
+              onGenerate={(choices) => void onGenerate(choices)}
+            />
+          </div>
+        )}
 
         {importProblems && (
           <div className="banner error">
