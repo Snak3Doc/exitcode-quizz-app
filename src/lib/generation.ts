@@ -157,11 +157,80 @@ export function normaliseQuestion(
   return { question, problems: checkQuestion(question) };
 }
 
+/**
+ * One question's worth of result, in the position it was asked for.
+ *
+ * The position matters because a repair pass puts a replacement back where the
+ * original was. The model is told to order a quiz so it builds up — easier
+ * first — and appending every repaired question at the end would throw that
+ * away for no reason.
+ */
+export type Slot =
+  | { ok: true; question: QuizFileQuestion }
+  | {
+      ok: false;
+      /** Null when the model returned nothing for this slot at all. */
+      type: QuestionType | null;
+      raw: GeneratedQuestion | null;
+      problems: string[];
+    };
+
+/** Convert a batch, keeping each result where it belongs. */
+export function normaliseSlots(
+  types: readonly (QuestionType | undefined)[],
+  raw: readonly GeneratedQuestion[],
+  timing: TimingChoice,
+): Slot[] {
+  const slots: Slot[] = [];
+  // Walk the longer of the two: a model can return fewer questions than were
+  // asked for as easily as more, and a teacher who asked for ten and silently
+  // got seven has no way to tell, having already spent the quota for ten.
+  const count = Math.max(types.length, raw.length);
+
+  for (let index = 0; index < count; index += 1) {
+    const type = types[index];
+    const item = raw[index];
+
+    if (type === undefined) {
+      slots.push({ ok: false, type: null, raw: null, problems: ['unexpected extra question'] });
+      continue;
+    }
+    if (item === undefined) {
+      slots.push({
+        ok: false,
+        type,
+        raw: null,
+        problems: ['the model did not return this question'],
+      });
+      continue;
+    }
+
+    const { question, problems } = normaliseQuestion(type, item, timing);
+    if (problems.length === 0) slots.push({ ok: true, question });
+    else slots.push({ ok: false, type, raw: item, problems });
+  }
+
+  return slots;
+}
+
 export interface GenerationOutcome {
   /** Questions that are ready to store, in the order they were generated. */
   kept: QuizFileQuestion[];
   /** One entry per question that had to be dropped, for telling the teacher. */
   dropped: { number: number; problems: string[] }[];
+}
+
+/** Flatten slots into what the teacher is told. */
+export function summarise(slots: readonly Slot[]): GenerationOutcome {
+  const kept: QuizFileQuestion[] = [];
+  const dropped: GenerationOutcome['dropped'] = [];
+
+  slots.forEach((slot, index) => {
+    if (slot.ok) kept.push(slot.question);
+    else dropped.push({ number: index + 1, problems: slot.problems });
+  });
+
+  return { kept, dropped };
 }
 
 /**
@@ -190,31 +259,49 @@ export function normaliseBatch(
   raw: GeneratedQuestion[],
   timing: TimingChoice,
 ): GenerationOutcome {
-  const kept: QuizFileQuestion[] = [];
-  const dropped: GenerationOutcome['dropped'] = [];
+  return summarise(normaliseSlots(types, raw, timing));
+}
 
-  // Walk the longer of the two: a model can return fewer questions than were
-  // asked for as easily as more, and a teacher who asked for ten and silently
-  // got seven has no way to tell, having already spent the quota for ten.
-  const count = Math.max(types.length, raw.length);
+/**
+ * Put repaired questions back where their originals were.
+ *
+ * The replacements arrive in the order the failures were sent, and each one is
+ * validated against the type its slot asked for. A replacement that is still
+ * wrong leaves the slot alone, carrying the problems from the second attempt
+ * rather than the first — those are the ones worth telling the teacher about.
+ */
+export function applyRepairs(
+  slots: readonly Slot[],
+  repaired: readonly GeneratedQuestion[],
+  timing: TimingChoice,
+): Slot[] {
+  const out = [...slots];
+  // Only slots that know their type can be repaired; one with no type is a
+  // question the model invented, and there is nothing to ask for again.
+  const repairable = out
+    .map((slot, index) => ({ slot, index }))
+    .filter((entry) => !entry.slot.ok && entry.slot.type !== null);
 
-  for (let index = 0; index < count; index += 1) {
-    const type = types[index];
-    const item = raw[index];
+  repairable.forEach((entry, position) => {
+    const replacement = repaired[position];
+    if (replacement === undefined) return;
 
-    if (type === undefined) {
-      dropped.push({ number: index + 1, problems: ['unexpected extra question'] });
-      continue;
-    }
-    if (item === undefined) {
-      dropped.push({ number: index + 1, problems: ['the model did not return this question'] });
-      continue;
-    }
+    const slot = entry.slot as Extract<Slot, { ok: false }>;
+    const { question, problems } = normaliseQuestion(slot.type!, replacement, timing);
+    out[entry.index] =
+      problems.length === 0
+        ? { ok: true, question }
+        : { ok: false, type: slot.type, raw: replacement, problems };
+  });
 
-    const { question, problems } = normaliseQuestion(type, item, timing);
-    if (problems.length === 0) kept.push(question);
-    else dropped.push({ number: index + 1, problems });
-  }
+  return out;
+}
 
-  return { kept, dropped };
+/** The slots a repair pass could do something about, in order. */
+export function repairable(
+  slots: readonly Slot[],
+): { type: QuestionType; raw: GeneratedQuestion | null; problems: string[] }[] {
+  return slots
+    .filter((slot): slot is Extract<Slot, { ok: false }> => !slot.ok && slot.type !== null)
+    .map((slot) => ({ type: slot.type!, raw: slot.raw, problems: slot.problems }));
 }

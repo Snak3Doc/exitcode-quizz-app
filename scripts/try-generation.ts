@@ -15,7 +15,11 @@
 
 import { readFileSync } from 'node:fs';
 import { DEFAULT_MODELS, generateQuiz } from '../supabase/functions/generate-quiz/gemini.ts';
-import { buildSystemPrompt, buildUserPrompt } from '../supabase/functions/generate-quiz/prompt.ts';
+import {
+  buildRepairPrompt,
+  buildSystemPrompt,
+  buildUserPrompt,
+} from '../supabase/functions/generate-quiz/prompt.ts';
 import { quizSchemaFor } from '../supabase/functions/generate-quiz/schema.ts';
 
 function keyFromEnvFile(): string | undefined {
@@ -35,6 +39,57 @@ const apiKey = process.env.GEMINI_API_KEY ?? keyFromEnvFile();
 if (!apiKey) {
   console.error('Put GEMINI_API_KEY=... in .env.local first.');
   process.exit(1);
+}
+
+/**
+ * `--repair` asks for a replacement for a deliberately broken question
+ * instead of a fresh quiz. The repair path only fires when the model gets
+ * something wrong, which is rare enough that waiting for it to happen is not
+ * a way to find out whether it works.
+ */
+const repairing = process.argv.includes('--repair');
+
+if (repairing) {
+  // A single-answer question with two correct options: the exact thing
+  // checkQuestion() rejects, described in checkQuestion()'s own words.
+  const broken = {
+    prompt: 'Which of these is a Python list method?',
+    explanation: 'Both append() and pop() are list methods.',
+    content: {
+      options: [
+        { kind: 'text', text: 'append()', correct: true },
+        { kind: 'text', text: 'pop()', correct: true },
+      ],
+    },
+  };
+
+  const repairResult = await generateQuiz({
+    apiKey,
+    models: DEFAULT_MODELS,
+    systemPrompt: buildSystemPrompt(['mc_single']),
+    userPrompt: buildRepairPrompt('Python list methods, for beginners', [
+      {
+        type: 'mc_single',
+        problems: ['a single-answer question needs exactly one correct option'],
+        question: broken,
+      },
+    ]),
+    responseSchema: quizSchemaFor(['mc_single']),
+  });
+
+  if (!repairResult.ok) {
+    console.error(`REPAIR FAILED (${repairResult.failure.kind})`);
+    console.error(JSON.stringify(repairResult.failure, null, 2));
+    process.exit(1);
+  }
+
+  console.log(`Repaired by ${repairResult.model}:\n`);
+  console.log(JSON.stringify(repairResult.questions, null, 2));
+  console.log(
+    '\nCheck that exactly one option is now correct, and that it is still the same\n' +
+      'question rather than an unrelated one.',
+  );
+  process.exit(0);
 }
 
 const types = ['mc_single', 'fill_blank', 'order_lines'];

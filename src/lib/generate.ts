@@ -9,7 +9,15 @@
 
 import { supabase } from './supabase';
 import { S } from '../strings';
-import { normaliseBatch, type GeneratedQuestion, type TimingChoice } from './generation';
+import {
+  applyRepairs,
+  normaliseSlots,
+  repairable,
+  summarise,
+  type GeneratedQuestion,
+  type GenerationOutcome,
+  type TimingChoice,
+} from './generation';
 import { createQuiz, insertQuestions } from './quizzes';
 import type { QuestionType } from './types';
 
@@ -99,7 +107,25 @@ export async function generateQuiz(options: GenerateOptions): Promise<GenerateOu
   const usable = types.every((type): type is QuestionType => typeof type === 'string');
   if (!usable) throw new GenerationError(S.generate.failed);
 
-  const outcome = normaliseBatch(types, raw, options.timing);
+  let slots = normaliseSlots(types, raw, options.timing);
+
+  // One repair pass, and only one. Questions come back malformed in specific,
+  // fixable ways -- a missing correct answer, a gap in the blank numbering --
+  // and the validator already says exactly which, in words a model can act on.
+  // Dropping those would waste part of a request already paid for.
+  //
+  // Capped at a single retry because an uncapped loop is how a generation
+  // feature turns into a drained quota, and a model that got it wrong twice is
+  // not usually about to get it right on the third go.
+  const failures = repairable(slots);
+  if (failures.length > 0) {
+    const replacements = await askForRepairs(options.topic, failures);
+    if (replacements.length > 0) {
+      slots = applyRepairs(slots, replacements, options.timing);
+    }
+  }
+
+  const outcome = summarise(slots);
   if (outcome.kept.length === 0) throw new GenerationError(S.generate.noneUsable);
 
   // Saving is reported separately. By this point the request has been spent
@@ -114,7 +140,7 @@ export async function generateQuiz(options: GenerateOptions): Promise<GenerateOu
 
 async function save(
   options: GenerateOptions,
-  outcome: ReturnType<typeof normaliseBatch>,
+  outcome: GenerationOutcome,
 ): Promise<GenerateOutcome> {
   const quizId = await createQuiz(titleFor(options.topic));
   await insertQuestions(
@@ -137,6 +163,37 @@ async function save(
   );
 
   return { quizId, kept: outcome.kept.length, dropped: outcome.dropped };
+}
+
+/**
+ * Ask for replacements for the questions that failed.
+ *
+ * A failed repair is not an error the teacher needs to see. The first pass
+ * already produced usable questions; this was an attempt to rescue the rest,
+ * and if it does not work they are reported as dropped exactly as they would
+ * have been. So anything that goes wrong here returns nothing and the original
+ * failures stand.
+ */
+async function askForRepairs(
+  topic: string,
+  failures: ReturnType<typeof repairable>,
+): Promise<GeneratedQuestion[]> {
+  try {
+    const { data, error } = await supabase.functions.invoke<FunctionReply>('generate-quiz', {
+      body: {
+        topic: topic.trim(),
+        repair: failures.map((failure) => ({
+          type: failure.type,
+          problems: failure.problems,
+          question: failure.raw ?? undefined,
+        })),
+      },
+    });
+    if (error || !Array.isArray(data?.questions)) return [];
+    return data.questions as GeneratedQuestion[];
+  } catch {
+    return [];
+  }
 }
 
 /**
