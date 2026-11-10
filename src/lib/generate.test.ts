@@ -71,6 +71,19 @@ describe('what a teacher is told when generation fails', () => {
     expect(message).toBe(S.generate.signedOut);
   });
 
+  it('treats the gateway\'s own 401 as an expired sign-in too', async () => {
+    // The gateway in front of the function has codes of its own and no reason
+    // to use ours, so the code is no help here. The status is.
+    const message = await messageFrom(
+      failedWith(401, {
+        code: 'UNAUTHORIZED_NO_AUTH_HEADER',
+        message: 'Missing authorization header',
+      }),
+    );
+
+    expect(message).toBe(S.generate.signedOut);
+  });
+
   it('passes on the codes the function documents', async () => {
     expect(await messageFrom(failedWith(503, { error: { code: 'quota_exhausted' } }))).toBe(
       S.generate.unavailable,

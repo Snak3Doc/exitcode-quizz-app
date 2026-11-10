@@ -152,7 +152,6 @@ function call(fetchImpl: typeof fetch, models = ['a', 'b']): GeminiCall {
     userPrompt: 'user',
     responseSchema: {},
     fetchImpl,
-    sleepImpl: async () => {},
   };
 }
 
@@ -168,18 +167,22 @@ describe('calling Gemini', () => {
     }
   });
 
-  it('moves to the next model when the first stays busy', async () => {
+  it('moves straight to the next model when the first says it is busy', async () => {
     // The spike found 3.8, 3.7 and 3.6 flash all returning 503 while an older
     // one answered, so this is the normal case rather than an edge case.
+    //
+    // No second go at the busy one: a model that has just said it is
+    // overloaded is a worse bet than one that has not been asked, and asking
+    // twice is how the budget ran out before the quick model got its turn.
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(reply(503, 'busy'))
       .mockResolvedValueOnce(reply(503, 'busy'))
       .mockResolvedValueOnce(reply(200, successBody([{ type: 'true_false' }])));
 
     const result = await generateQuiz(call(fetchImpl as unknown as typeof fetch));
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.model).toBe('b');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it('follows the replacement a retired model names', async () => {
@@ -262,10 +265,11 @@ describe('the time the whole call is allowed', () => {
     };
   }
 
-  it('stops walking the list once the budget is gone', async () => {
-    // Found live: two models took a connection and never answered, so the
-    // loop spent a minute each while Supabase killed the worker at 90s. The
-    // teacher got a dropped connection, which says nothing they can act on.
+  it('gives every model a turn even when the ones before it are slow', async () => {
+    // Found live: ordered best-first, the strongest model took the budget
+    // whether it was healthy or not, and the quick one that answers in 8s
+    // never got asked. Half of all generations failed with a model still
+    // untried, which is the worst way to spend a ceiling.
     const time = clock();
     const fetchImpl = vi.fn(async () => {
       time.advance(30_000);
@@ -278,13 +282,56 @@ describe('the time the whole call is allowed', () => {
       budgetMs: 70_000,
     });
 
-    // Three models, two attempts each, is six calls if nothing stops it.
+    // Two slow models eat 60s of 70s between them. The third is still asked.
     expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.kind).toBe('unavailable');
+  });
+
+  it('stops asking once the budget really is gone', async () => {
+    const time = clock();
+    const fetchImpl = vi.fn(async () => {
+      time.advance(100_000); // Longer than the whole budget.
+      throw new Error('The operation was aborted due to timeout');
+    });
+
+    const result = await generateQuiz({
+      ...call(fetchImpl as unknown as typeof fetch, ['a', 'b', 'c']),
+      nowImpl: time.now,
+      budgetMs: 70_000,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.failure.kind).toBe('unavailable');
       expect(result.failure.detail).toContain('Ran out of time');
     }
+  });
+
+  it('holds a slice back for each model still to come', async () => {
+    const time = clock();
+    const timeouts: number[] = [];
+    const spy = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      timeouts.push(ms);
+      return new AbortController().signal;
+    });
+    const fetchImpl = vi.fn(async () => {
+      time.advance(46_000);
+      return reply(503, 'busy');
+    });
+
+    await generateQuiz({
+      ...call(fetchImpl as unknown as typeof fetch, ['best', 'middle', 'quick']),
+      nowImpl: time.now,
+      budgetMs: 70_000,
+    });
+
+    // 70s, less 12s each for the two behind it, is 46s for the first.
+    expect(timeouts[0]).toBe(46_000);
+    // And the last one is still given its slice rather than the 0 left over.
+    expect(timeouts[timeouts.length - 1]).toBeGreaterThanOrEqual(1);
+    spy.mockRestore();
   });
 
   it('gives a model no longer than the call has left', async () => {

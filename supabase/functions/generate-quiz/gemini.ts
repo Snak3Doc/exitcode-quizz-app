@@ -36,6 +36,22 @@ export const REQUEST_TIMEOUT_MS = 60_000;
  */
 export const TOTAL_BUDGET_MS = 70_000;
 
+/**
+ * The least time any model in the list is guaranteed.
+ *
+ * The budget alone was not enough. Ordered best-first, the strongest model
+ * takes 39s when it is healthy and the full timeout when it is not, so on
+ * 2026-11-10 roughly half of all generations died with the budget spent and
+ * 3.5-flash-lite -- which answered in 8s every single time -- never tried at
+ * all. "Best first" is only free when there is no ceiling.
+ *
+ * So every model still to come has this much held back for it, and the model
+ * being tried gets what is left over. The good model keeps its chance; the
+ * quick one keeps its turn. 12s against a measured 8s leaves room for a bad
+ * day without being worth starving anyone for.
+ */
+export const MIN_MODEL_SLICE_MS = 12_000;
+
 /** Why a generation attempt ended, in terms the caller can act on. */
 export type GeminiFailure =
   /** Busy, rate limited, or out of quota. The teacher is told to try later. */
@@ -57,15 +73,11 @@ export interface GeminiCall {
   userPrompt: string;
   responseSchema: unknown;
   fetchImpl?: typeof fetch;
-  /** Injected in tests so retries do not actually wait. */
-  sleepImpl?: (ms: number) => Promise<void>;
   /** Injected in tests so the budget can run out without the clock moving. */
   nowImpl?: () => number;
   /** Defaults to TOTAL_BUDGET_MS. */
   budgetMs?: number;
 }
-
-const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 interface RawResponse {
   status: number;
@@ -106,6 +118,19 @@ async function callOnce(
   }
 }
 
+/**
+ * How long the model being tried may have, given how many are still to come.
+ *
+ * Each of those is owed MIN_MODEL_SLICE_MS, so this model gets the rest --
+ * capped at REQUEST_TIMEOUT_MS, since beyond that it is not coming. When the
+ * reservation would leave this model nothing, it still gets a slice: it is the
+ * one being asked, and a socket opened for zero milliseconds helps nobody.
+ */
+function sliceFor(timeLeft: number, modelsStillToCome: number): number {
+  const share = Math.min(REQUEST_TIMEOUT_MS, timeLeft - modelsStillToCome * MIN_MODEL_SLICE_MS);
+  return share > 0 ? share : Math.min(MIN_MODEL_SLICE_MS, timeLeft);
+}
+
 /** Pull the questions array out of a successful response. */
 function readQuestions(text: string): unknown[] | null {
   try {
@@ -133,7 +158,6 @@ function readQuestions(text: string): unknown[] | null {
  */
 export async function generateQuiz(call: GeminiCall): Promise<GeminiResult> {
   const doFetch = call.fetchImpl ?? fetch;
-  const sleep = call.sleepImpl ?? realSleep;
   const now = call.nowImpl ?? Date.now;
 
   if (call.models.length === 0) {
@@ -143,10 +167,12 @@ export async function generateQuiz(call: GeminiCall): Promise<GeminiResult> {
   const deadline = now() + (call.budgetMs ?? TOTAL_BUDGET_MS);
   let lastDetail = 'No model answered.';
 
-  for (const candidate of call.models) {
-    let model = candidate;
+  for (let index = 0; index < call.models.length; index += 1) {
+    let model = call.models[index];
 
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
+    // Two turns per entry, so a retired model can be followed to the
+    // replacement it names. Not a retry: see the 503 case below.
+    for (let hop = 1; hop <= 2; hop += 1) {
       // No model may be given longer than the call has left, and one with
       // nothing left is not worth opening a socket for.
       const timeLeft = deadline - now();
@@ -161,7 +187,7 @@ export async function generateQuiz(call: GeminiCall): Promise<GeminiResult> {
         call,
         model,
         doFetch,
-        Math.min(REQUEST_TIMEOUT_MS, timeLeft),
+        sliceFor(timeLeft, call.models.length - index - 1),
       );
 
       if (status === 200) {
@@ -182,12 +208,11 @@ export async function generateQuiz(call: GeminiCall): Promise<GeminiResult> {
       }
 
       if (status === 503 || status === 429 || status === 500) {
+        // Straight on to the next model, with no second go at this one. A
+        // model that has just said it is overloaded is a worse bet than one
+        // that has not been asked, and the budget only stretches so far.
         lastDetail = `${model}: ${status}`;
-        if (attempt === 1) {
-          await sleep(2_000);
-          continue;
-        }
-        break; // Next model.
+        break;
       }
 
       // 400 and friends: the request is wrong, and trying another model with

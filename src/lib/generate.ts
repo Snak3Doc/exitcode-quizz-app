@@ -81,18 +81,26 @@ interface FunctionReply {
   code?: string;
 }
 
-/** The error code behind a non-2xx reply, from wherever it was put. */
-async function codeFromError(error: unknown): Promise<string | undefined> {
+/**
+ * What a teacher should be told about a non-2xx reply.
+ *
+ * The status is read as well as the code because a 401 can come from the
+ * gateway in front of the function, which has codes of its own
+ * (UNAUTHORIZED_NO_AUTH_HEADER) and no reason to use ours. Whoever says it,
+ * a 401 means the same thing: sign in again.
+ */
+async function messageForError(error: unknown): Promise<string> {
   try {
     // supabase-js turns any non-2xx into an error and keeps the body on the
     // response, so dig the code out rather than showing a bare "failed".
     const response = (error as { context?: Response }).context;
-    if (!response || typeof response.json !== 'function') return undefined;
+    if (!response || typeof response.json !== 'function') return S.generate.unreachable;
+    if (response.status === 401) return S.generate.signedOut;
     const body = (await response.json()) as FunctionReply;
-    return body.error?.code ?? body.code;
+    return messageForCode(body.error?.code ?? body.code);
   } catch {
-    // Not JSON, or already read. The caller's generic message stands.
-    return undefined;
+    // Not JSON, or already read. Nothing is known, so say only that.
+    return S.generate.unreachable;
   }
 }
 
@@ -114,7 +122,7 @@ export async function generateQuiz(options: GenerateOptions): Promise<GenerateOu
   });
 
   if (error) {
-    throw new GenerationError(messageForCode(await codeFromError(error)));
+    throw new GenerationError(await messageForError(error));
   }
 
   const raw = Array.isArray(data?.questions) ? (data.questions as GeneratedQuestion[]) : [];
@@ -261,7 +269,7 @@ export async function regenerateQuestion(options: {
   });
 
   if (error) {
-    throw new GenerationError(messageForCode(await codeFromError(error)));
+    throw new GenerationError(await messageForError(error));
   }
 
   const raw = Array.isArray(data?.questions) ? (data.questions as GeneratedQuestion[]) : [];
