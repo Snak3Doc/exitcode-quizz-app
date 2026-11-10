@@ -247,8 +247,11 @@ export class HostEngine {
     if (this.players.has(playerId)) {
       // Back again -- briefly away, or away long enough to have been counted
       // out. Either way they are listening again.
-      const wasAway = this.leftAt.delete(playerId) || this.away.delete(playerId);
-      if (wasAway) {
+      // Both, not either: `||` would skip clearing `away` whenever a grace
+      // was also running, and leave them marked gone while they sit there.
+      const hadLeft = this.leftAt.delete(playerId);
+      const wasAway = this.away.delete(playerId);
+      if (hadLeft || wasAway) {
         this.broadcastPlayers();
         if (this.phase === 'question') this.broadcastProgress();
         this.changed();

@@ -686,3 +686,25 @@ describe('coming back at an awkward moment', () => {
     expect(state.leaderboard?.map((e) => e.name)).toEqual(['Sam']);
   });
 });
+
+describe('a student who comes back after being counted out', () => {
+  it('is no longer away once their presence returns', () => {
+    const h = makeEngine(twoQuestionQuiz());
+    join(h, 'p1', 'Sam');
+    join(h, 'p2', 'Linh');
+    h.engine.start();
+
+    h.engine.handlePresenceLeave('p1');
+    h.advance(DISCONNECT_GRACE_MS);
+    expect(h.engine.view().players.find((p) => p.id === 'p1')?.away).toBe(true);
+
+    // A late leave for the old connection can put a grace back on someone who
+    // has already returned. Clearing only one of the two would leave them
+    // marked gone while they sit there answering.
+    h.engine.handlePresenceLeave('p1');
+    h.engine.handlePresenceJoin('p1');
+
+    expect(h.engine.view().players.find((p) => p.id === 'p1')?.away).toBeUndefined();
+    expect(h.last('progress')).toEqual({ submitted: 0, total: 2 });
+  });
+});

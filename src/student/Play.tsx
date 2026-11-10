@@ -122,6 +122,56 @@ export function Play() {
           return;
         }
 
+        /**
+         * Where the game had got to while they were away.
+         *
+         * Listened for *before* the join request goes out, because the host
+         * sends it in the same breath as the acceptance -- registering it
+         * afterwards means it arrives before anything is listening and is
+         * simply lost. If it turns up before the screens are ready it waits
+         * here and is applied once they are.
+         */
+        let pendingState: Messages['state'] | null = null;
+        let readyForState = false;
+
+        const applyState = (payload: Messages['state']) => {
+          setPlayers(payload.players);
+
+          if (payload.phase === 'question' && payload.question) {
+            setQuestion(payload.question);
+            setAnswer(undefined);
+            setResult(null);
+            deadlineRef.current =
+              payload.question.timing.mode === 'timed' &&
+              payload.question.timing.remainingMs !== undefined
+                ? Date.now() + payload.question.timing.remainingMs
+                : null;
+            setRemainingMs(payload.question.timing.remainingMs ?? null);
+            // Already answered before they dropped: back to the locked screen,
+            // not a second go at it.
+            setScreen(payload.submitted ? 'locked' : 'question');
+            return;
+          }
+
+          if (payload.phase === 'final' && payload.leaderboard) {
+            // The game finished while they were away. Show them how it ended
+            // rather than a waiting screen that will never change.
+            setFinalBoard({ leaderboard: payload.leaderboard });
+            setScreen('final');
+            return;
+          }
+
+          // Between questions. Nothing for them to do but wait for the
+          // teacher, which is what everyone else is doing too.
+          setScreen('waiting');
+        };
+
+        channel.on('state', (payload) => {
+          if (payload.playerId !== playerId) return;
+          if (readyForState) applyState(payload);
+          else pendingState = payload;
+        });
+
         const reply = new Promise<Messages['join_accepted'] | JoinRejectReason>(
           (resolve) => {
             channel!.on('join_accepted', (payload) => {
@@ -154,46 +204,15 @@ export function Play() {
         playerIdRef.current = playerId;
         setName(joinName);
         setPlayers(answered.players);
-        // A returning student is put on the waiting screen only until `state`
-        // arrives, which is immediately -- the host sends it with the accept.
         setScreen('waiting');
         writeMarker({ code, playerId, name: joinName });
 
         channel.on('players', (payload) => setPlayers(payload.players));
 
-        // Where the game had got to while they were away.
-        channel.on('state', (payload) => {
-          if (payload.playerId !== playerId) return;
-          setPlayers(payload.players);
-
-          if (payload.phase === 'question' && payload.question) {
-            setQuestion(payload.question);
-            setAnswer(undefined);
-            setResult(null);
-            deadlineRef.current =
-              payload.question.timing.mode === 'timed' &&
-              payload.question.timing.remainingMs !== undefined
-                ? Date.now() + payload.question.timing.remainingMs
-                : null;
-            setRemainingMs(payload.question.timing.remainingMs ?? null);
-            // Already answered before they dropped: back to the locked screen,
-            // not a second go at it.
-            setScreen(payload.submitted ? 'locked' : 'question');
-            return;
-          }
-
-          if (payload.phase === 'final' && payload.leaderboard) {
-            // The game finished while they were away. Show them how it ended
-            // rather than a waiting screen that will never change.
-            setFinalBoard({ leaderboard: payload.leaderboard });
-            setScreen('final');
-            return;
-          }
-
-          // Between questions. Nothing for them to do but wait for the
-          // teacher, which is what everyone else is doing too.
-          setScreen('waiting');
-        });
+        // Now the screens exist, so a state message can be acted on -- either
+        // one that arrived while we were still setting up, or a later one.
+        readyForState = true;
+        if (pendingState) applyState(pendingState);
 
         channel.on('question', (payload) => {
           setQuestion(payload);

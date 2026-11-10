@@ -58,7 +58,15 @@ export function HostGame() {
           code: shareCode,
           presenceKey: HOST_PRESENCE_KEY,
           onPresenceJoin: (key) => engineRef.current?.handlePresenceJoin(key),
-          onPresenceLeave: (key) => engineRef.current?.handlePresenceLeave(key),
+          onPresenceLeave: (key) => {
+            // A reconnect is a join on the new connection and a leave on the
+            // old one, both under the same key, and the leave can arrive
+            // second. Taking it at face value marks a student who is sitting
+            // there as having lost their connection. Presence itself knows
+            // better, so ask it.
+            if (channel?.presenceKeys().includes(key)) return;
+            engineRef.current?.handlePresenceLeave(key);
+          },
         });
 
         const engine = new HostEngine({
