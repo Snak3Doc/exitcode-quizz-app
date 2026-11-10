@@ -685,6 +685,43 @@ describe('coming back at an awkward moment', () => {
     // Otherwise they would sit on "waiting for the teacher" for ever.
     expect(state.leaderboard?.map((e) => e.name)).toEqual(['Sam']);
   });
+
+  it('gives back the time that is left, not the time the question opened with', () => {
+    // Found live: a student refreshed and their countdown started again from
+    // the top while the teacher's ran on, so they were cut off with ten
+    // seconds apparently still to go.
+    const h = makeEngine(
+      quizWith([
+        question('q1', 'mc_single', mcContent, {
+          timingMode: 'timed',
+          timeLimitSeconds: 30,
+        }),
+      ]),
+    );
+    join(h, 'p1', 'Sam');
+    join(h, 'p2', 'Linh');
+    h.engine.start();
+
+    h.advance(12_000);
+    h.clear();
+    h.engine.handleJoinRequest({ playerId: 'p1', name: 'Sam' });
+
+    expect(h.last('state')!.question?.timing).toEqual({ mode: 'timed', remainingMs: 18_000 });
+  });
+
+  it('comes back to the same shuffle it left', () => {
+    // The order of the options is the question: handing back a fresh shuffle
+    // would move the answer out from under a student who had already picked.
+    const h = makeEngine(quizWith([question('q1', 'mc_single', mcContent)]));
+    join(h, 'p1', 'Sam');
+    h.engine.start();
+    const first = h.last('question')!.content;
+    h.clear();
+
+    h.engine.handleJoinRequest({ playerId: 'p1', name: 'Sam' });
+
+    expect(h.last('state')!.question?.content).toEqual(first);
+  });
 });
 
 describe('a student who comes back after being counted out', () => {
