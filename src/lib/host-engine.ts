@@ -93,6 +93,16 @@ export class HostEngine {
   private readonly submissions = new Map<string, Submission>();
   /** Player id -> the moment their presence went away. */
   private readonly leftAt = new Map<string, number>();
+  /**
+   * Players whose grace has run out, once the game is under way.
+   *
+   * They keep their place and their score: a laptop that sleeps, drops its
+   * wifi or gets refreshed should not cost a student the game. The class is
+   * not kept waiting for them, and they rejoin by coming back with the same
+   * player id. In the lobby a dropped player is removed instead -- they never
+   * really started.
+   */
+  private readonly away = new Set<string>();
 
   private index = -1;
   /**
@@ -123,7 +133,9 @@ export class HostEngine {
     const question = this.index >= 0 ? (this.quiz.questions[this.index] ?? null) : null;
     return {
       phase: this.phase,
-      players: [...this.players.values()],
+      // Carries the away flag, so the teacher can see why a name is not
+      // answering rather than waiting on a laptop that has gone.
+      players: this.playerList(),
       index: this.index,
       total: this.quiz.questions.length,
       question,
@@ -154,14 +166,26 @@ export class HostEngine {
   }
 
   private broadcastPlayers() {
-    this.send('players', { players: [...this.players.values()] });
+    this.send('players', { players: this.playerList() });
+  }
+
+  private playerList(): Player[] {
+    return [...this.players.values()].map((player) =>
+      this.away.has(player.id) ? { ...player, away: true } : player,
+    );
   }
 
   private broadcastProgress() {
     this.send('progress', {
       submitted: this.submissions.size,
-      total: this.players.size,
+      // Only the laptops still listening. Counting a student whose connection
+      // has gone would leave the class waiting on someone who cannot answer.
+      total: this.connectedCount(),
     });
+  }
+
+  private connectedCount(): number {
+    return this.players.size - this.away.size;
   }
 
   // ---------- joining ----------
@@ -170,10 +194,19 @@ export class HostEngine {
     const { playerId } = request;
     if (!playerId) return;
 
-    // Asking twice (a dropped reply, say) gets the same answer.
+    // A player we already know is coming back: a dropped reply, a refresh, a
+    // laptop that went to sleep. They keep their score and their place.
     const existing = this.players.get(playerId);
     if (existing) {
-      this.send('join_accepted', { playerId, players: [...this.players.values()] });
+      this.leftAt.delete(playerId);
+      this.away.delete(playerId);
+      this.send('join_accepted', { playerId, players: this.playerList() });
+      // Where the game has got to, so they land where the class is rather
+      // than on a waiting screen until the next question.
+      this.sendState(playerId);
+      this.broadcastPlayers();
+      if (this.phase === 'question') this.broadcastProgress();
+      this.changed();
       return;
     }
 
@@ -212,8 +245,14 @@ export class HostEngine {
   handlePresenceJoin(playerId: string): void {
     if (playerId === 'host') return;
     if (this.players.has(playerId)) {
-      // They were only briefly away.
-      if (this.leftAt.delete(playerId)) this.changed();
+      // Back again -- briefly away, or away long enough to have been counted
+      // out. Either way they are listening again.
+      const wasAway = this.leftAt.delete(playerId) || this.away.delete(playerId);
+      if (wasAway) {
+        this.broadcastPlayers();
+        if (this.phase === 'question') this.broadcastProgress();
+        this.changed();
+      }
       return;
     }
     if (this.phase !== 'lobby') {
@@ -251,10 +290,18 @@ export class HostEngine {
 
     let removedSomeone = false;
     for (const [playerId, when] of [...this.leftAt.entries()]) {
-      if (now - when >= DISCONNECT_GRACE_MS) {
+      if (now - when < DISCONNECT_GRACE_MS) continue;
+
+      if (this.phase === 'lobby') {
+        // Nothing to lose yet, and a ghost in the lobby holds their name.
         this.removePlayer(playerId);
-        removedSomeone = true;
+      } else {
+        // Keep them and their score; just stop waiting for them.
+        this.leftAt.delete(playerId);
+        this.away.add(playerId);
+        this.broadcastPlayers();
       }
+      removedSomeone = true;
     }
 
     if (removedSomeone && this.phase === 'question') {
@@ -342,9 +389,33 @@ export class HostEngine {
   }
 
   /** True only when there is at least one player and all of them have answered. */
+  /**
+   * Tell one returning student where the game is.
+   *
+   * Sent to everyone, like every message here, and ignored by anyone it does
+   * not name -- which is why it is this rather than re-broadcasting the
+   * question. Re-sending the question would wipe the half-typed answer of
+   * every student who is in the middle of one.
+   */
+  private sendState(playerId: string): void {
+    if (this.phase === 'ended') return;
+    this.send('state', {
+      playerId,
+      phase: this.phase,
+      players: this.playerList(),
+      question: this.phase === 'question' ? this.publicQuestion : null,
+      submitted: this.submissions.has(playerId),
+      leaderboard: this.phase === 'final' ? this.currentLeaderboard() : null,
+    });
+  }
+
   private everyoneHasSubmitted(): boolean {
-    if (this.players.size === 0) return false;
+    // Nobody connected means nobody to wait for, and nothing to end.
+    if (this.connectedCount() === 0) return false;
     for (const playerId of this.players.keys()) {
+      // A student who is away cannot answer, so the class is not held up by
+      // them. Their answer still counts if they come back in time.
+      if (this.away.has(playerId)) continue;
       if (!this.submissions.has(playerId)) return false;
     }
     return true;

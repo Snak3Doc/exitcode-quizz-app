@@ -1078,3 +1078,10 @@ legend {
   overflow-wrap: anywhere;
   overflow-x: visible;
 }
+
+/* A student whose laptop has stopped answering. Amber, like a partial mark:
+   not an error, just not something to wait for. */
+.mark.away {
+  color: var(--amber);
+  font-weight: 400;
+}

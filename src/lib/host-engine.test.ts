@@ -416,14 +416,24 @@ describe('disconnects', () => {
     expect(h.engine.view().players).toHaveLength(2);
   });
 
-  it('removes a player once the grace has run out', () => {
+  it('keeps a player who drops mid-game, marked away', () => {
+    // A laptop that sleeps or loses wifi should not cost a student the game.
     h.engine.start();
+    h.engine.handlePresenceLeave('p1');
+    h.advance(DISCONNECT_GRACE_MS);
+
+    expect(h.engine.view().players.map((p) => p.id)).toEqual(['p1', 'p2']);
+    expect(h.engine.view().players.find((p) => p.id === 'p1')?.away).toBe(true);
+    expect(h.all('removed')).toEqual([]);
+  });
+
+  it('still removes a player who drops in the lobby', () => {
+    // Nothing to lose before the game starts, and a ghost holds their name.
     h.engine.handlePresenceLeave('p1');
     h.advance(DISCONNECT_GRACE_MS);
 
     expect(h.engine.view().players.map((p) => p.id)).toEqual(['p2']);
     expect(h.last('removed')).toEqual({ playerId: 'p1' });
-    expect(h.last('players')).toEqual({ players: [{ id: 'p2', name: 'Linh' }] });
   });
 
   it('a leaver stops blocking the others', () => {
@@ -434,12 +444,22 @@ describe('disconnects', () => {
     h.engine.handlePresenceLeave('p1');
     h.advance(DISCONNECT_GRACE_MS);
 
-    // p2 was the only one left and had already answered.
+    // Everyone still listening had answered, so the question ends -- the class
+    // is not held up by a laptop that cannot reply.
     expect(h.engine.view().phase).toBe('results');
-    expect(h.last('results')!.outcomes.map((o) => o.playerId)).toEqual(['p2']);
+    expect(h.last('results')!.outcomes.map((o) => o.playerId)).toContain('p2');
   });
 
-  it('drops a removed player from the leaderboard', () => {
+  it('stops counting an away player towards the progress total', () => {
+    h.engine.start();
+    h.engine.handlePresenceLeave('p1');
+    h.advance(DISCONNECT_GRACE_MS);
+
+    expect(h.last('progress')).toEqual({ submitted: 0, total: 1 });
+  });
+
+  it('keeps an away player on the leaderboard with their score', () => {
+    // Losing a score to a dropped connection is the thing this prevents.
     h.engine.start();
     h.engine.handleSubmit({ playerId: 'p1', questionIndex: 0, answer: 'o1' });
     h.engine.handleSubmit({ playerId: 'p2', questionIndex: 0, answer: 'o1' });
@@ -448,17 +468,57 @@ describe('disconnects', () => {
     h.advance(DISCONNECT_GRACE_MS);
     h.engine.showResultsNow();
 
-    expect(h.last('results')!.leaderboard.map((e) => e.name)).toEqual(['Linh']);
+    const board = h.last('results')!.leaderboard;
+    expect(board.map((e) => e.name).sort()).toEqual(['Linh', 'Sam']);
+    expect(board.find((e) => e.name === 'Sam')!.total).toBeGreaterThan(0);
   });
 
-  it('tells a reconnecting removed student that they are out', () => {
+  it('welcomes back a student who comes round again', () => {
     h.engine.start();
     h.engine.handlePresenceLeave('p1');
     h.advance(DISCONNECT_GRACE_MS);
     h.clear();
 
-    h.engine.handlePresenceJoin('p1');
-    expect(h.last('removed')).toEqual({ playerId: 'p1' });
+    h.engine.handleJoinRequest({ playerId: 'p1', name: 'Sam' });
+
+    expect(h.all('removed')).toEqual([]);
+    expect(h.last('join_accepted')?.playerId).toBe('p1');
+    expect(h.engine.view().players.find((p) => p.id === 'p1')?.away).toBeUndefined();
+  });
+
+  it('tells a returning student where the game has got to', () => {
+    h.engine.start();
+    h.engine.handlePresenceLeave('p1');
+    h.advance(DISCONNECT_GRACE_MS);
+    h.clear();
+
+    h.engine.handleJoinRequest({ playerId: 'p1', name: 'Sam' });
+
+    const state = h.last('state')!;
+    expect(state.playerId).toBe('p1');
+    expect(state.phase).toBe('question');
+    // Without the question they would sit on a waiting screen until the next
+    // one, having missed this one for no reason.
+    expect(state.question).not.toBeNull();
+    expect(state.submitted).toBe(false);
+  });
+
+  it('tells a returning student they had already answered', () => {
+    h.engine.start();
+    h.engine.handleSubmit({ playerId: 'p1', questionIndex: 0, answer: 'o1' });
+    h.engine.handlePresenceLeave('p1');
+    h.advance(DISCONNECT_GRACE_MS);
+    h.clear();
+
+    h.engine.handleJoinRequest({ playerId: 'p1', name: 'Sam' });
+
+    expect(h.last('state')!.submitted).toBe(true);
+  });
+
+  it('still turns away a stranger once the game has started', () => {
+    h.engine.start();
+    h.engine.handlePresenceJoin('stranger');
+    expect(h.last('removed')).toEqual({ playerId: 'stranger' });
   });
 
   it('says nothing to an unknown presence while still in the lobby', () => {
@@ -484,13 +544,16 @@ describe('a question with nobody connected', () => {
     h.engine.handlePresenceLeave('p1');
     h.advance(DISCONNECT_GRACE_MS);
 
-    expect(h.engine.view().players).toHaveLength(0);
+    // Still on the roster, just not answering: they may well come back.
+    expect(h.engine.view().players).toHaveLength(1);
+    expect(h.engine.view().players[0].away).toBe(true);
     expect(h.engine.view().phase).toBe('question');
 
     h.engine.showResultsNow();
     expect(h.engine.view().phase).toBe('results');
-    expect(h.last('results')!.outcomes).toEqual([]);
-    expect(h.last('results')!.leaderboard).toEqual([]);
+    // They missed it, so no answer -- which is also what the teacher needs to
+    // see, rather than an empty screen.
+    expect(h.last('results')!.outcomes.map((o) => o.playerId)).toEqual(['p1']);
   });
 });
 
@@ -576,5 +639,50 @@ describe('the projector never carries an answer', () => {
     const content = harness.engine.view().publicQuestion!.content;
     expect(content.answers).toBeUndefined();
     expect(content.wordBank).toEqual(['range', 'len']);
+  });
+});
+
+describe('coming back at an awkward moment', () => {
+  function rejoinDuring(prepare: (h: ReturnType<typeof makeEngine>) => void) {
+    const h = makeEngine(twoQuestionQuiz());
+    join(h, 'p1', 'Sam');
+    join(h, 'p2', 'Linh');
+    h.engine.start();
+    prepare(h);
+    h.engine.handlePresenceLeave('p1');
+    h.advance(DISCONNECT_GRACE_MS);
+    h.clear();
+    h.engine.handleJoinRequest({ playerId: 'p1', name: 'Sam' });
+    return h;
+  }
+
+  it('sends no question while the results are up', () => {
+    const h = rejoinDuring((harness) => {
+      harness.engine.handleSubmit({ playerId: 'p1', questionIndex: 0, answer: 'o1' });
+      harness.engine.handleSubmit({ playerId: 'p2', questionIndex: 0, answer: 'o1' });
+    });
+
+    const state = h.last('state')!;
+    expect(state.phase).toBe('results');
+    expect(state.question).toBeNull();
+    expect(state.leaderboard).toBeNull();
+  });
+
+  it('shows the finish to someone who comes back after the game ended', () => {
+    const h = makeEngine(twoQuestionQuiz());
+    join(h, 'p1', 'Sam');
+    h.engine.start();
+    h.engine.handleSubmit({ playerId: 'p1', questionIndex: 0, answer: 'o1' });
+    h.engine.next();
+    h.engine.handleSubmit({ playerId: 'p1', questionIndex: 1, answer: 'o1' });
+    h.engine.finish();
+    h.clear();
+
+    h.engine.handleJoinRequest({ playerId: 'p1', name: 'Sam' });
+
+    const state = h.last('state')!;
+    expect(state.phase).toBe('final');
+    // Otherwise they would sit on "waiting for the teacher" for ever.
+    expect(state.leaderboard?.map((e) => e.name)).toEqual(['Sam']);
   });
 });

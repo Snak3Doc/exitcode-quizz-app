@@ -265,6 +265,7 @@ export const S = {
     whoHasAnswered: 'Who has answered',
     submitted: 'submitted',
     waiting: 'waiting…',
+    away: 'lost connection',
     showResultsNow: 'Show results now',
     resultsHeading: (n: number, total: number) =>
       `Question ${n} of ${total} · Results`,
