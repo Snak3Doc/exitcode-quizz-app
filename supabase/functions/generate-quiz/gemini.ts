@@ -17,8 +17,24 @@
 
 const BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
-/** Long enough for a ten-question quiz, short enough to fail before the platform does. */
+/** Long enough for a ten-question quiz. Measured: 8s, 28s and 39s on 2026-11-10. */
 export const REQUEST_TIMEOUT_MS = 60_000;
+
+/**
+ * How long the whole call may take, retries and all.
+ *
+ * One attempt finishing before the platform does is not enough. On 2026-11-10
+ * the first two models in the list accepted the connection and never answered,
+ * so the loop spent its 60 seconds, slept, and started again -- and Supabase
+ * killed the worker at 90s with WORKER_RESOURCE_LIMIT. The browser sees a
+ * dropped connection and has nothing to tell the teacher.
+ *
+ * So the budget belongs to the call, not the attempt. Running out of it is an
+ * answer: "busy, try later" is true and act-on-able, where a dead socket is
+ * neither. The list will rot again; this is what keeps one bad entry from
+ * taking the feature down with it.
+ */
+export const TOTAL_BUDGET_MS = 70_000;
 
 /** Why a generation attempt ended, in terms the caller can act on. */
 export type GeminiFailure =
@@ -43,6 +59,10 @@ export interface GeminiCall {
   fetchImpl?: typeof fetch;
   /** Injected in tests so retries do not actually wait. */
   sleepImpl?: (ms: number) => Promise<void>;
+  /** Injected in tests so the budget can run out without the clock moving. */
+  nowImpl?: () => number;
+  /** Defaults to TOTAL_BUDGET_MS. */
+  budgetMs?: number;
 }
 
 const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -56,6 +76,7 @@ async function callOnce(
   call: GeminiCall,
   model: string,
   doFetch: typeof fetch,
+  timeoutMs: number,
 ): Promise<RawResponse> {
   try {
     const response = await doFetch(
@@ -71,7 +92,7 @@ async function callOnce(
             responseSchema: call.responseSchema,
           },
         }),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       },
     );
     return { status: response.status, text: await response.text() };
@@ -107,22 +128,41 @@ function readQuestions(text: string): unknown[] | null {
  * that is retired is swapped for the replacement it names. Anything else is
  * returned straight away, because it says something about the request rather
  * than about the weather.
+ *
+ * The whole walk shares one budget. Whatever the models do, this answers.
  */
 export async function generateQuiz(call: GeminiCall): Promise<GeminiResult> {
   const doFetch = call.fetchImpl ?? fetch;
   const sleep = call.sleepImpl ?? realSleep;
+  const now = call.nowImpl ?? Date.now;
 
   if (call.models.length === 0) {
     return { ok: false, failure: { kind: 'unavailable', detail: 'No models configured.' } };
   }
 
+  const deadline = now() + (call.budgetMs ?? TOTAL_BUDGET_MS);
   let lastDetail = 'No model answered.';
 
   for (const candidate of call.models) {
     let model = candidate;
 
     for (let attempt = 1; attempt <= 2; attempt += 1) {
-      const { status, text } = await callOnce(call, model, doFetch);
+      // No model may be given longer than the call has left, and one with
+      // nothing left is not worth opening a socket for.
+      const timeLeft = deadline - now();
+      if (timeLeft <= 0) {
+        return {
+          ok: false,
+          failure: { kind: 'unavailable', detail: `Ran out of time. ${lastDetail}` },
+        };
+      }
+
+      const { status, text } = await callOnce(
+        call,
+        model,
+        doFetch,
+        Math.min(REQUEST_TIMEOUT_MS, timeLeft),
+      );
 
       if (status === 200) {
         const questions = readQuestions(text);
@@ -166,10 +206,17 @@ export async function generateQuiz(call: GeminiCall): Promise<GeminiResult> {
  * list includes retired models, and the newest are the most congested. A
  * hard-coded order that ends somewhere old and quiet is more reliable, and
  * `generateQuiz` follows Google's redirect if one of these retires.
+ *
+ * 3.8-flash and 3.7-flash were at the head of this list and are gone from it.
+ * They are still in the API's own model list and still take a connection, but
+ * on 2026-11-10 neither sent a byte back -- not a 503, nothing -- so every
+ * generation died on the first entry. Measured with a real ten-question quiz
+ * that day: 3.6-flash 39s, 3.5-flash 28s, 3.5-flash-lite 8s.
+ *
+ * If generation starts failing again, this list is the first thing to check:
+ * call each one and see what answers. `scripts/try-generation.ts` does it.
  */
 export const DEFAULT_MODELS = [
-  'gemini-3.8-flash',
-  'gemini-3.7-flash',
   'gemini-3.6-flash',
   'gemini-3.5-flash',
   'gemini-3.5-flash-lite',

@@ -55,7 +55,14 @@ function messageForCode(code: string | undefined): string {
       return S.generate.misconfigured;
     case 'generation_failed':
     case 'bad_request':
+    case 'method_not_allowed':
       return S.generate.failed;
+    case 'unauthenticated':
+      return S.generate.signedOut;
+    // Supabase's own, when it kills the worker rather than letting it answer.
+    case 'WORKER_RESOURCE_LIMIT':
+    case 'WORKER_LIMIT':
+      return S.generate.tookTooLong;
     default:
       return S.generate.unreachable;
   }
@@ -64,6 +71,29 @@ function messageForCode(code: string | undefined): string {
 interface FunctionReply {
   questions?: unknown;
   error?: { code?: string; message?: string };
+  /**
+   * The platform puts its code here instead, outside the `error` this function
+   * documents -- a killed worker never ran the code that would have nested it.
+   * Reading only `error.code` is how a worker killed mid-generation came out as
+   * "check your connection", which sent teachers to retry a request that was
+   * always going to be killed again.
+   */
+  code?: string;
+}
+
+/** The error code behind a non-2xx reply, from wherever it was put. */
+async function codeFromError(error: unknown): Promise<string | undefined> {
+  try {
+    // supabase-js turns any non-2xx into an error and keeps the body on the
+    // response, so dig the code out rather than showing a bare "failed".
+    const response = (error as { context?: Response }).context;
+    if (!response || typeof response.json !== 'function') return undefined;
+    const body = (await response.json()) as FunctionReply;
+    return body.error?.code ?? body.code;
+  } catch {
+    // Not JSON, or already read. The caller's generic message stands.
+    return undefined;
+  }
 }
 
 /**
@@ -84,19 +114,7 @@ export async function generateQuiz(options: GenerateOptions): Promise<GenerateOu
   });
 
   if (error) {
-    // supabase-js turns any non-2xx into an error and keeps the body on the
-    // response, so dig the code out rather than showing a bare "failed".
-    let code: string | undefined;
-    try {
-      const response = (error as { context?: Response }).context;
-      if (response && typeof response.json === 'function') {
-        const body = (await response.json()) as FunctionReply;
-        code = body.error?.code;
-      }
-    } catch {
-      // Keep the generic message below.
-    }
-    throw new GenerationError(messageForCode(code));
+    throw new GenerationError(messageForCode(await codeFromError(error)));
   }
 
   const raw = Array.isArray(data?.questions) ? (data.questions as GeneratedQuestion[]) : [];
@@ -243,16 +261,7 @@ export async function regenerateQuestion(options: {
   });
 
   if (error) {
-    let code: string | undefined;
-    try {
-      const response = (error as { context?: Response }).context;
-      if (response && typeof response.json === 'function') {
-        code = ((await response.json()) as FunctionReply).error?.code;
-      }
-    } catch {
-      // Keep the generic message.
-    }
-    throw new GenerationError(messageForCode(code));
+    throw new GenerationError(messageForCode(await codeFromError(error)));
   }
 
   const raw = Array.isArray(data?.questions) ? (data.questions as GeneratedQuestion[]) : [];

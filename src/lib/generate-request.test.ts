@@ -248,6 +248,91 @@ describe('calling Gemini', () => {
   });
 });
 
+// ---------- the budget ----------
+
+describe('the time the whole call is allowed', () => {
+  /** A clock we move by hand, so a budget can run out instantly. */
+  function clock(start = 1_000_000) {
+    let value = start;
+    return {
+      now: () => value,
+      advance: (ms: number) => {
+        value += ms;
+      },
+    };
+  }
+
+  it('stops walking the list once the budget is gone', async () => {
+    // Found live: two models took a connection and never answered, so the
+    // loop spent a minute each while Supabase killed the worker at 90s. The
+    // teacher got a dropped connection, which says nothing they can act on.
+    const time = clock();
+    const fetchImpl = vi.fn(async () => {
+      time.advance(30_000);
+      throw new Error('The operation was aborted due to timeout');
+    });
+
+    const result = await generateQuiz({
+      ...call(fetchImpl as unknown as typeof fetch, ['a', 'b', 'c']),
+      nowImpl: time.now,
+      budgetMs: 70_000,
+    });
+
+    // Three models, two attempts each, is six calls if nothing stops it.
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.kind).toBe('unavailable');
+      expect(result.failure.detail).toContain('Ran out of time');
+    }
+  });
+
+  it('gives a model no longer than the call has left', async () => {
+    const time = clock();
+    let timeoutGiven: number | undefined;
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      timeoutGiven = (init.signal as AbortSignal & { _ms?: number })._ms;
+      time.advance(55_000);
+      throw new Error('The operation was aborted due to timeout');
+    });
+
+    // AbortSignal.timeout keeps its delay to itself, so read it from the call.
+    const spy = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      const signal = new AbortController().signal as AbortSignal & { _ms?: number };
+      signal._ms = ms;
+      return signal;
+    });
+
+    await generateQuiz({
+      ...call(fetchImpl as unknown as typeof fetch, ['a', 'b']),
+      nowImpl: time.now,
+      budgetMs: 70_000,
+    });
+
+    // The first attempt may have the full 60s; the second has the 15s left,
+    // not another 60 that would run the worker past its limit.
+    expect(fetchImpl.mock.calls.length).toBeGreaterThan(1);
+    expect(timeoutGiven).toBe(15_000);
+    spy.mockRestore();
+  });
+
+  it('still answers a model that is simply slow', async () => {
+    const time = clock();
+    const fetchImpl = vi.fn(async () => {
+      time.advance(39_000); // 3.6-flash, measured.
+      return reply(200, successBody([{ type: 'true_false' }]));
+    });
+
+    const result = await generateQuiz({
+      ...call(fetchImpl as unknown as typeof fetch),
+      nowImpl: time.now,
+      budgetMs: 70_000,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+});
+
 // ---------- repairs ----------
 
 describe('a repair request', () => {
