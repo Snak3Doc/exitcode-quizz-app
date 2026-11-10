@@ -300,6 +300,10 @@ function QuestionScreen({
                 {player.name}
                 {view.submitted.has(player.id) ? (
                   <span className="mark correct">✓ {S.host.submitted}</span>
+                ) : player.away ? (
+                  // Not just slow: their laptop has stopped answering. Saying
+                  // so stops the teacher waiting on someone who cannot reply.
+                  <span className="mark away">{S.host.away}</span>
                 ) : (
                   <span className="dim">{S.host.waiting}</span>
                 )}

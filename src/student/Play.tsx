@@ -81,23 +81,21 @@ export function Play() {
   // ---------- join ----------
 
   useEffect(() => {
-    const action = openAction(readMarker(), pending, code);
-    if (action === 'left') {
-      // The marker stays until they go back to the join screen, so that this
-      // effect reaches the same decision every time it runs. Clearing it here
-      // would let React's development double-invoke join the game for real on
-      // the second pass, behind the screen telling them they have left.
-      setScreen('removed');
-      return;
-    }
+    const marker = readMarker();
+    const action = openAction(marker, pending, code);
     if (action === 'home') {
       navigate('/', { replace: true });
       return;
     }
 
+    // Coming back to a game this tab was already in keeps the same player id,
+    // which is how the host recognises them and gives back their score.
+    const rejoining = action === 'rejoin';
+    const joinName = rejoining ? marker!.name : pending!.name;
+
     let cancelled = false;
     let channel: GameChannel | null = null;
-    const playerId = crypto.randomUUID();
+    const playerId = rejoining ? marker!.playerId : crypto.randomUUID();
     playerIdRef.current = playerId;
 
     async function join() {
@@ -136,7 +134,7 @@ export function Play() {
           },
         );
 
-        channel.send('join_request', { playerId, name: pending!.name });
+        channel.send('join_request', { playerId, name: joinName });
         const answered = await reply;
         if (cancelled) return;
 
@@ -154,12 +152,48 @@ export function Play() {
 
         channelRef.current = channel;
         playerIdRef.current = playerId;
-        setName(pending!.name);
+        setName(joinName);
         setPlayers(answered.players);
+        // A returning student is put on the waiting screen only until `state`
+        // arrives, which is immediately -- the host sends it with the accept.
         setScreen('waiting');
-        writeMarker({ code, playerId });
+        writeMarker({ code, playerId, name: joinName });
 
         channel.on('players', (payload) => setPlayers(payload.players));
+
+        // Where the game had got to while they were away.
+        channel.on('state', (payload) => {
+          if (payload.playerId !== playerId) return;
+          setPlayers(payload.players);
+
+          if (payload.phase === 'question' && payload.question) {
+            setQuestion(payload.question);
+            setAnswer(undefined);
+            setResult(null);
+            deadlineRef.current =
+              payload.question.timing.mode === 'timed' &&
+              payload.question.timing.remainingMs !== undefined
+                ? Date.now() + payload.question.timing.remainingMs
+                : null;
+            setRemainingMs(payload.question.timing.remainingMs ?? null);
+            // Already answered before they dropped: back to the locked screen,
+            // not a second go at it.
+            setScreen(payload.submitted ? 'locked' : 'question');
+            return;
+          }
+
+          if (payload.phase === 'final' && payload.leaderboard) {
+            // The game finished while they were away. Show them how it ended
+            // rather than a waiting screen that will never change.
+            setFinalBoard({ leaderboard: payload.leaderboard });
+            setScreen('final');
+            return;
+          }
+
+          // Between questions. Nothing for them to do but wait for the
+          // teacher, which is what everyone else is doing too.
+          setScreen('waiting');
+        });
 
         channel.on('question', (payload) => {
           setQuestion(payload);
@@ -529,25 +563,35 @@ function rejectionMessage(reason: JoinRejectReason | 'timeout'): string {
 
 // ---------- remembering that this tab was in a game ----------
 
+/** What this tab remembers about the game it is in. */
+export interface SessionMarker {
+  code: string;
+  playerId: string;
+  name: string;
+}
+
 /**
  * What a tab should do when /play/:code opens.
  *
- * A refresh loses the game: there is no rejoining. The marker, not `pending`,
- * is what says this tab has already been in this game — React Router keeps
+ * A marker for this game means the tab has already been in it — a refresh, or
+ * a laptop that was closed and reopened. That is a **rejoin**: the host knows
+ * this player id and gives them their place and their score back.
+ *
+ * The marker, not `pending`, is what says so. React Router keeps
  * location.state in history.state, which the browser restores on a reload, so
- * `pending` survives a refresh too and cannot tell a refresh from a fresh join.
+ * `pending` survives a refresh too and cannot tell one from a fresh join.
  */
 export function openAction(
-  marker: { code: string; playerId: string } | null,
+  marker: SessionMarker | null,
   pending: PendingJoin | null,
   code: string,
-): 'left' | 'join' | 'home' {
-  if (marker && marker.code === code) return 'left';
+): 'rejoin' | 'join' | 'home' {
+  if (marker && marker.code === code && marker.name) return 'rejoin';
   if (!pending) return 'home';
   return 'join';
 }
 
-function writeMarker(marker: { code: string; playerId: string }) {
+function writeMarker(marker: SessionMarker) {
   try {
     sessionStorage.setItem(SESSION_MARKER_KEY, JSON.stringify(marker));
   } catch {
@@ -555,10 +599,10 @@ function writeMarker(marker: { code: string; playerId: string }) {
   }
 }
 
-function readMarker(): { code: string; playerId: string } | null {
+function readMarker(): SessionMarker | null {
   try {
     const raw = sessionStorage.getItem(SESSION_MARKER_KEY);
-    return raw ? (JSON.parse(raw) as { code: string; playerId: string }) : null;
+    return raw ? (JSON.parse(raw) as SessionMarker) : null;
   } catch {
     return null;
   }

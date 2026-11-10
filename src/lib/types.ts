@@ -148,6 +148,13 @@ export interface QuestionRow {
 export interface Player {
   id: string;
   name: string;
+  /**
+   * Their laptop has stopped answering: a dropped connection, a closed lid, a
+   * refresh. They keep their score and may come back. The teacher sees it so
+   * they know why someone is not answering, and the game does not wait for
+   * them.
+   */
+  away?: boolean;
 }
 
 export type AnswerValue =
@@ -231,6 +238,25 @@ export interface Messages {
   };
   final: { leaderboard: LeaderboardEntry[] };
   removed: { playerId: string };
+  /**
+   * Where the game is, for a student who has just come back.
+   *
+   * Sent only in reply to a rejoin, so nobody else's screen is disturbed.
+   * Everyone receives it, as with every message here, and ignores one that
+   * names a different player.
+   */
+  state: {
+    playerId: string;
+    phase: 'lobby' | 'question' | 'results' | 'final';
+    players: Player[];
+    /** The question they should be looking at, when one is open. */
+    question: PublicQuestion | null;
+    /** True when they already answered this one before they dropped. */
+    submitted: boolean;
+    /** Only when the game has finished, so they see the result and not a
+     *  waiting screen that will never change. */
+    leaderboard: LeaderboardEntry[] | null;
+  };
   game_ended: { reason: GameEndedReason };
 }
 
