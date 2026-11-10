@@ -14,6 +14,7 @@ import { HostEngine, type HostView } from '../lib/host-engine';
 import { loadQuiz } from '../lib/quizzes';
 import { correctAnswerFor, generateShareCode, ordinal } from '../lib/game-logic';
 import { validateQuizForHosting } from '../lib/schema';
+import { PRESENCE_SETTLE_MS } from '../lib/constants';
 import {
   AnswerPreview,
   CorrectAnswerView,
@@ -62,10 +63,16 @@ export function HostGame() {
             // A reconnect is a join on the new connection and a leave on the
             // old one, both under the same key, and the leave can arrive
             // second. Taking it at face value marks a student who is sitting
-            // there as having lost their connection. Presence itself knows
-            // better, so ask it.
-            if (channel?.presenceKeys().includes(key)) return;
-            engineRef.current?.handlePresenceLeave(key);
+            // there as having lost their connection.
+            //
+            // Presence knows who is really there -- but not yet when this
+            // fires: at that moment it still lists the leaver, so asking now
+            // swallows every genuine disconnect instead. Ask once it has
+            // settled.
+            window.setTimeout(() => {
+              if (channel?.presenceKeys().includes(key)) return;
+              engineRef.current?.handlePresenceLeave(key);
+            }, PRESENCE_SETTLE_MS);
           },
         });
 
