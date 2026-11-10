@@ -86,7 +86,13 @@ export const S = {
     notApproved: 'This account is not approved to generate quizzes.',
     misconfigured:
       'Generation is not set up on the server. The API key or the function is missing.',
-    unreachable: "Couldn't reach the generator. Check your connection and try again.",
+    signedOut: 'Your sign-in has expired. Reload the page and sign in again.',
+    tookTooLong:
+      'Generation took too long and was cut off. Try again, or ask for fewer questions.',
+    // The last resort, so it says only what is actually known. Naming the
+    // teacher's connection was wrong often enough to be worth not saying:
+    // a server that answers with something unrecognised is not their wi-fi.
+    unreachable: 'Generation did not work and did not say why. Try again.',
   },
 
   // ---------- Teacher: editor ----------
