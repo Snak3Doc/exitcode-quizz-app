@@ -1062,3 +1062,19 @@ legend {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/*
+ * A code block that wraps instead of scrolling sideways.
+ *
+ * Used for multiple-choice options, which are usually a single short
+ * expression. A long one in a scrolling box cannot be read from the back of a
+ * classroom, and nobody can scroll a projector. `pre-wrap` keeps the leading
+ * spaces that carry meaning in Python while still letting the line break, and
+ * `anywhere` handles a single token longer than the box.
+ */
+.code.wrap,
+.sortable-line .line-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-x: visible;
+}

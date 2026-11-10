@@ -30,6 +30,7 @@ import type {
   Messages,
   Player,
   PlayerOutcome,
+  PublicQuestion,
   Question,
 } from './types';
 
@@ -51,6 +52,11 @@ export interface HostView {
   total: number;
   question: Question | null;
   submitted: Set<string>;
+  /**
+   * The question as the students received it: shuffled where it should be,
+   * and with nothing marked correct. What the projector shows.
+   */
+  publicQuestion: PublicQuestion | null;
   /** null on untimed questions and outside a question. */
   remainingMs: number | null;
   results: ResultsSnapshot | null;
@@ -89,6 +95,15 @@ export class HostEngine {
   private readonly leftAt = new Map<string, number>();
 
   private index = -1;
+  /**
+   * Exactly what was broadcast to the students for the current question.
+   *
+   * Kept because the projector must show the same thing they do. The order of
+   * an "order the lines" question is shuffled when it is sent; without this
+   * the projector would read the quiz instead and put the lines in their
+   * correct order, which is the answer.
+   */
+  private publicQuestion: PublicQuestion | null = null;
   private questionStartedAt = 0;
   private questionEndsAt: number | null = null;
   private results: ResultsSnapshot | null = null;
@@ -112,6 +127,7 @@ export class HostEngine {
       index: this.index,
       total: this.quiz.questions.length,
       question,
+      publicQuestion: this.publicQuestion,
       submitted: new Set(this.submissions.keys()),
       remainingMs:
         this.phase === 'question' && this.questionEndsAt !== null
@@ -290,18 +306,18 @@ export class HostEngine {
         ? this.questionStartedAt + question.timeLimitSeconds * 1000
         : null;
 
-    this.send(
-      'question',
-      toPublicQuestion(
-        question,
-        index,
-        this.quiz.questions.length,
-        this.questionEndsAt === null
-          ? undefined
-          : this.questionEndsAt - this.questionStartedAt,
-        this.random,
-      ),
+    // Built once and kept, so the projector and the students are reading the
+    // same thing rather than two shuffles of it.
+    this.publicQuestion = toPublicQuestion(
+      question,
+      index,
+      this.quiz.questions.length,
+      this.questionEndsAt === null
+        ? undefined
+        : this.questionEndsAt - this.questionStartedAt,
+      this.random,
     );
+    this.send('question', this.publicQuestion);
     this.broadcastProgress();
     this.changed();
   }

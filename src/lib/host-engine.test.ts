@@ -493,3 +493,88 @@ describe('a question with nobody connected', () => {
     expect(h.last('results')!.leaderboard).toEqual([]);
   });
 });
+
+describe('what the projector is allowed to see', () => {
+  const lines = [
+    { id: 'l1', text: 'total = 0' },
+    { id: 'l2', text: 'for n in nums:' },
+    { id: 'l3', text: '    total += n' },
+    { id: 'l4', text: 'print(total)' },
+  ];
+
+  function started() {
+    const harness = makeEngine(
+      quizWith([question('q1', 'order_lines', { language: 'python', lines })]),
+    );
+    harness.engine.handleJoinRequest({ playerId: 'p1', name: 'Ana' });
+    harness.engine.handlePresenceJoin('p1');
+    harness.engine.start();
+    return harness;
+  }
+
+  it('keeps the question exactly as the students got it', () => {
+    const { engine, last } = started();
+    // Not a second shuffle of the same question: the same object, so the
+    // projector and the class cannot drift apart.
+    expect(engine.view().publicQuestion).toEqual(last('question'));
+  });
+
+  it('does not show the lines in their correct order', () => {
+    // The bug this replaces: the projector read the quiz, which holds the
+    // lines in the order that answers the question.
+    const { engine } = started();
+    const shown = (engine.view().publicQuestion!.content.lines as typeof lines).map(
+      (l) => l.text,
+    );
+    expect(shown).not.toEqual(lines.map((l) => l.text));
+    expect([...shown].sort()).toEqual(lines.map((l) => l.text).sort());
+  });
+
+  it('still knows the correct order itself, for marking', () => {
+    const { engine } = started();
+    const truth = (engine.view().question!.content.lines as typeof lines).map((l) => l.text);
+    expect(truth).toEqual(lines.map((l) => l.text));
+  });
+
+  it('has nothing to show before a question starts', () => {
+    const harness = makeEngine(
+      quizWith([question('q1', 'order_lines', { language: 'python', lines })]),
+    );
+    expect(harness.engine.view().publicQuestion).toBeNull();
+  });
+});
+
+describe('the projector never carries an answer', () => {
+  // The helper that used to build the projector's copy existed to strip these
+  // out. Deleting it is how a leak gets put back, so pin the guarantee here.
+  it('sends no correct flags on a multiple-choice question', () => {
+    const harness = makeEngine(quizWith([question('q1', 'mc_single', mcContent)]));
+    harness.engine.handleJoinRequest({ playerId: 'p1', name: 'Ana' });
+    harness.engine.handlePresenceJoin('p1');
+    harness.engine.start();
+
+    const shown = JSON.stringify(harness.engine.view().publicQuestion);
+    expect(shown).not.toMatch(/correct/);
+    expect(shown).toMatch(/right/); // the option text is still there
+  });
+
+  it('sends no answers on a fill in the blank question', () => {
+    const harness = makeEngine(
+      quizWith([
+        question('q1', 'fill_blank', {
+          language: 'python',
+          snippet: 'for i in {{1}}(5):',
+          wordBank: ['range', 'len'],
+          answers: { '1': 'range' },
+        }),
+      ]),
+    );
+    harness.engine.handleJoinRequest({ playerId: 'p1', name: 'Ana' });
+    harness.engine.handlePresenceJoin('p1');
+    harness.engine.start();
+
+    const content = harness.engine.view().publicQuestion!.content;
+    expect(content.answers).toBeUndefined();
+    expect(content.wordBank).toEqual(['range', 'len']);
+  });
+});

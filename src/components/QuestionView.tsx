@@ -39,7 +39,18 @@ export function QuestionBody({
 /** One lettered option, text or code. */
 export function OptionBody({ option }: { option: PublicOption }) {
   if (option.kind === 'code') {
-    return <CodeDisplay code={option.text} language={option.language ?? 'plaintext'} />;
+    // `wrap` rather than the scrolling a code block normally gets. An option
+    // is usually one short expression, and a long one in a scrolling box is
+    // unreadable on a projector -- nobody can scroll it from the back of the
+    // room. The question's own code block keeps its scroll, where the line
+    // structure matters and the teacher chose the content.
+    return (
+      <CodeDisplay
+        code={option.text}
+        language={option.language ?? 'plaintext'}
+        className="wrap"
+      />
+    );
   }
   return <span style={{ whiteSpace: 'pre-wrap' }}>{option.text}</span>;
 }
