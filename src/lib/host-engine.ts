@@ -406,10 +406,27 @@ export class HostEngine {
       playerId,
       phase: this.phase,
       players: this.playerList(),
-      question: this.phase === 'question' ? this.publicQuestion : null,
+      question: this.phase === 'question' ? this.questionWithTimeLeft() : null,
       submitted: this.submissions.has(playerId),
       leaderboard: this.phase === 'final' ? this.currentLeaderboard() : null,
     });
+  }
+
+  /**
+   * The question as it was first sent, but with the clock where it stands now.
+   *
+   * The stored copy carries the time the question opened with, and a student
+   * counts down from whatever it says. Replaying it would start their clock
+   * again from the top and then cut them off with time apparently left, so
+   * give them what the host will actually honour. The shuffled lines and
+   * options are the same object, so they come back to the question they left.
+   */
+  private questionWithTimeLeft(): PublicQuestion | null {
+    const question = this.publicQuestion;
+    if (question === null || question.timing.mode !== 'timed') return question;
+    const remainingMs =
+      this.questionEndsAt === null ? 0 : Math.max(0, this.questionEndsAt - this.now());
+    return { ...question, timing: { ...question.timing, remainingMs } };
   }
 
   private everyoneHasSubmitted(): boolean {
