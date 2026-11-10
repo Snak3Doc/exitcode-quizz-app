@@ -4,6 +4,18 @@ export const MAX_PLAYERS = 30;
 export const MAX_QUESTIONS_PER_QUIZ = 50;
 
 export const DISCONNECT_GRACE_MS = 10_000;
+/**
+ * How long to let presence settle before believing a leave.
+ *
+ * A reload is a leave on the old connection and a join on the new one under
+ * the same key, and they can arrive in either order. Presence itself knows
+ * who is there, but not at the instant the leave fires -- asking then still
+ * reports the leaver as present, which is why this waits.
+ *
+ * It only has to outlast that, not a whole reconnect: the grace above covers
+ * the rest.
+ */
+export const PRESENCE_SETTLE_MS = 1_500;
 export const HOST_GONE_GRACE_MS = 10_000;
 
 /** How long a joining student waits for the host's presence, then for its reply. */
