@@ -278,9 +278,15 @@ function QuestionScreen({
 
       <div className="window">
         <div className="body">
+          {/*
+            The students' own copy of the question, not the quiz's. An "order
+            the lines" question is shuffled when it is sent; reading the quiz
+            here would put the lines back in their correct order on the
+            projector, which is the answer.
+          */}
           <AnswerPreview
             type={question.type}
-            content={publicContentForProjector(view)}
+            content={view.publicQuestion?.content ?? {}}
           />
         </div>
       </div>
@@ -317,34 +323,6 @@ function QuestionScreen({
  * Order-the-lines is shown in the teacher's order, since every student has a
  * different shuffle and the class needs one shared reference.
  */
-function publicContentForProjector(view: HostView): Record<string, unknown> {
-  const question = view.question!;
-  switch (question.type) {
-    case 'mc_single':
-    case 'mc_multi': {
-      const options = (question.content.options as Array<Record<string, unknown>>) ?? [];
-      return {
-        options: options.map(({ id, kind, language, text }) => ({
-          id,
-          kind,
-          language,
-          text,
-        })),
-      };
-    }
-    case 'fill_blank':
-      return {
-        language: question.content.language,
-        snippet: question.content.snippet,
-        wordBank: question.content.wordBank,
-      };
-    case 'order_lines':
-      return { language: question.content.language, lines: question.content.lines };
-    default:
-      return {};
-  }
-}
-
 function Countdown({ remainingMs }: { remainingMs: number }) {
   const seconds = Math.ceil(remainingMs / 1000);
   const minutes = Math.floor(seconds / 60);
