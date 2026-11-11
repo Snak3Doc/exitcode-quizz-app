@@ -47,7 +47,7 @@ export function Join() {
 
   return (
     <main className="centre-page">
-      <h1 className="dollar">{S.app.name}</h1>
+      <h1 className="app-mark">{S.app.name}</h1>
 
       {!supabaseConfigured && (
         <div className="narrow banner error">{SUPABASE_SETUP_MESSAGE}</div>
