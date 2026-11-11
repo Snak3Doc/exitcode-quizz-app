@@ -21,10 +21,46 @@ import type { Session } from '@supabase/supabase-js';
 import { S } from '../strings';
 import { supabase, supabaseConfigured } from './supabase';
 
+/**
+ * Hide most of an address, for when there is no name to show instead.
+ *
+ * A teacher is often signed in on a projector in front of a class, and their
+ * work address is not something to put on the wall. Enough is kept that they
+ * can tell which account they are on; the rest is nobody's business.
+ */
+export function maskEmail(email: string): string {
+  const at = email.lastIndexOf('@');
+  if (at <= 0) return '•••';
+  const local = email.slice(0, at);
+  const domain = email.slice(at);
+  // One character for a very short local part, two when there is room.
+  const keep = local.length <= 2 ? 1 : 2;
+  return `${local.slice(0, keep)}•••${domain}`;
+}
+
+/**
+ * What to call the person signed in.
+ *
+ * Google gives a name, which is the friendly thing to show and gives nothing
+ * away. Signing in with an address and password gives no name, so that falls
+ * back to a masked address rather than the whole thing.
+ */
+export function signedInAs(session: Session | null): string | null {
+  if (!session) return null;
+  const meta = session.user.user_metadata as Record<string, unknown> | undefined;
+  for (const key of ['full_name', 'name']) {
+    const value = meta?.[key];
+    if (typeof value === 'string' && value.trim() !== '') return value.trim();
+  }
+  const email = session.user.email;
+  return email ? maskEmail(email) : null;
+}
+
 interface AuthState {
   /** null once we know there is no signed-in approved teacher. */
   session: Session | null;
-  email: string | null;
+  /** A name to show, never the address itself. See `signedInAs`. */
+  displayName: string | null;
   loading: boolean;
   /** Set when a sign-in was refused because the email is not approved. */
   rejectedMessage: string | null;
@@ -119,7 +155,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AuthState>(
     () => ({
       session,
-      email: session?.user.email ?? null,
+      displayName: signedInAs(session),
       loading,
       rejectedMessage,
       clearRejected: () => setRejectedMessage(null),

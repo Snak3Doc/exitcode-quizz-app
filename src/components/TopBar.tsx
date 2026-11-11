@@ -5,7 +5,7 @@ import { S } from '../strings';
 import { useAuth } from '../lib/auth';
 
 export function TopBar({ left, right }: { left?: ReactNode; right?: ReactNode }) {
-  const { email, signOut } = useAuth();
+  const { displayName, signOut } = useAuth();
 
   return (
     <header className="topbar">
@@ -15,7 +15,7 @@ export function TopBar({ left, right }: { left?: ReactNode; right?: ReactNode })
       </div>
       <div className="row-tight">
         {right}
-        {email && <span className="dim">{email}</span>}
+        {displayName && <span className="dim">{displayName}</span>}
         <button type="button" className="ghost" onClick={() => void signOut()}>
           {S.signIn.signOut}
         </button>
