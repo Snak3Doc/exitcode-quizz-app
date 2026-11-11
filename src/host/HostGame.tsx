@@ -374,6 +374,23 @@ function ResultsScreen({ view, onNext }: { view: HostView; onNext: () => void })
         <span className="tag accent">{S.types[results.question.type]}</span>
       </div>
 
+      {/*
+        The question itself, which the results screen used to drop. Going over
+        an answer with a class that can no longer see what was asked is most of
+        the value of the screen gone -- and the code block is often the
+        question, so it comes back too.
+      */}
+      <div className="window">
+        <div className="title-bar">{S.host.theQuestion}</div>
+        <div className="body">
+          <QuestionBody
+            prompt={results.question.prompt}
+            code={results.question.code}
+            codeLanguage={results.question.codeLanguage}
+          />
+        </div>
+      </div>
+
       <div className="two-col-even">
         <div className="stack-lg">
           <div className="window">

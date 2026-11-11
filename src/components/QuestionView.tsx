@@ -188,7 +188,14 @@ function highlightCached(code: string, language: CodeLanguage): string {
   return html;
 }
 
-/** The correct answer, as both results screens show it. SPEC 3.6. */
+/**
+ * The correct answer, as both results screens show it. SPEC 3.6.
+ *
+ * Every option is shown, not only the right one. Dropping the others leaves
+ * the answer with nothing to be right about: a class going over a question
+ * needs to see what they were choosing between, and a student who picked C
+ * learns more from seeing C beside the answer than from the answer alone.
+ */
 export function CorrectAnswerView({ correct }: { correct: CorrectAnswer }) {
   switch (correct.type) {
     case 'mc_single':
@@ -196,28 +203,36 @@ export function CorrectAnswerView({ correct }: { correct: CorrectAnswer }) {
       const correctIds = new Set(correct.optionIds);
       return (
         <div className="stack">
-          {correct.options.map((option, index) =>
-            correctIds.has(option.id) ? (
-              <div key={option.id} className="option is-correct">
+          {correct.options.map((option, index) => {
+            const right = correctIds.has(option.id);
+            return (
+              <div key={option.id} className={right ? 'option is-correct' : 'option is-dim'}>
                 <span className="letter">[{optionLetter(index)}]</span>
                 <span className="option-body">
                   <OptionBody option={option} />
                 </span>
-                <span className="mark correct">✓</span>
+                {right && <span className="mark correct">✓</span>}
               </div>
-            ) : null,
-          )}
+            );
+          })}
         </div>
       );
     }
 
     case 'true_false':
       return (
-        <div className="option is-correct">
-          <span className="option-body">
-            {correct.correct ? S.answers.trueLabel : S.answers.falseLabel}
-          </span>
-          <span className="mark correct">✓</span>
+        <div className="stack">
+          {[true, false].map((value) => (
+            <div
+              key={String(value)}
+              className={value === correct.correct ? 'option is-correct' : 'option is-dim'}
+            >
+              <span className="option-body">
+                {value ? S.answers.trueLabel : S.answers.falseLabel}
+              </span>
+              {value === correct.correct && <span className="mark correct">✓</span>}
+            </div>
+          ))}
         </div>
       );
 
