@@ -258,7 +258,13 @@ export const S = {
 
   // ---------- Projector / host ----------
   host: {
-    joinInstructions: (site: string) => `Go to  ${site}  and enter this code`,
+    /**
+     * Split rather than one string, so the address can be coloured like the
+     * code. It is the other half of the same instruction, and a student
+     * reading a projector should be able to find both at a glance.
+     */
+    joinInstructionsBefore: 'Go to',
+    joinInstructionsAfter: 'and enter this code',
     quizLine: (title: string, questions: number) =>
       `Quiz: ${title} — ${questions} ${questions === 1 ? 'question' : 'questions'}`,
     playersJoined: (n: number) => `Players joined (${n})`,
