@@ -155,7 +155,7 @@ Deno.serve(async (request: Request): Promise<Response> => {
     userPrompt: repairing
       ? buildRepairPrompt(topic, body.repair)
       : buildUserPrompt({ topic, count: (body as GenerateRequest).count, types }),
-    responseSchema: quizSchemaFor(types),
+    responseSchema: quizSchemaFor(types, !repairing),
   });
 
   if (!result.ok) {
@@ -177,5 +177,5 @@ Deno.serve(async (request: Request): Promise<Response> => {
   // The questions go back raw. Converting and validating them happens in the
   // browser, where `checkQuestion()` already judges imported questions, so
   // generated ones are held to exactly the same standard by the same code.
-  return json({ model: result.model, questions: result.questions }, 200);
+  return json({ model: result.model, title: result.title, questions: result.questions }, 200);
 });

@@ -139,6 +139,14 @@ export function buildUserPrompt(request: PromptRequest): string {
   return [
     `Write ${count} question${count === 1 ? '' : 's'} about: ${topic}`,
     '',
+    // A teacher's topic is a description of what they want, not a name for it:
+    // "Python for loops using lists and enumerate() for intermediate students"
+    // is a fine brief and a terrible thing to read in a list of quizzes.
+    'Also name the quiz. The name goes in a list, so keep it to a few words — the ' +
+      'subject only, not a description of the class or the questions. Shorter is ' +
+      'better: "Python for loops" beats "Python for loops and the range() function ' +
+      'for beginners".',
+    '',
     `Use only these question types: ${names}.`,
     count > 1
       ? 'Vary the types across the quiz rather than using one for everything, and order ' +

@@ -278,13 +278,30 @@ export function questionSchemaFor(type: string): GeminiSchema {
  * the question types in the order they were asked for, which nothing
  * guarantees.
  */
-export function quizSchemaFor(types: readonly string[]): GeminiSchema {
+/**
+ * `withTitle` is off for a repair. A repair replaces one question in a quiz
+ * that is already named, so asking for a name there spends tokens on an
+ * answer nobody reads.
+ */
+export function quizSchemaFor(
+  types: readonly string[],
+  withTitle = true,
+): GeminiSchema {
   const distinct = [...new Set(types)];
   if (distinct.length === 0) throw new Error('A quiz needs at least one question type.');
 
-  return {
+  const title: GeminiSchema = {
+    type: 'STRING',
+    description:
+      'A short name for this quiz, for a list of quizzes: at most 6 words and ' +
+      'ideally 3 or 4, naming the subject only. No "Quiz", no "A quiz about", no ' +
+      'year level, no audience, no trailing punctuation. For example "Python for ' +
+      'loops" or "List methods and slicing".',
+  };
+
+  const schema: GeminiSchema = {
     type: 'OBJECT',
-    required: ['questions'],
+    required: withTitle ? ['title', 'questions'] : ['questions'],
     properties: {
       questions: {
         type: 'ARRAY',
@@ -328,6 +345,9 @@ export function quizSchemaFor(types: readonly string[]): GeminiSchema {
       },
     },
   };
+
+  if (withTitle && schema.properties) schema.properties.title = title;
+  return schema;
 }
 
 /**

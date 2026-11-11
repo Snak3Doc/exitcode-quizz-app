@@ -8,6 +8,7 @@
  */
 
 import { supabase } from './supabase';
+import { MAX_TITLE_LENGTH } from './constants';
 import { S } from '../strings';
 import {
   applyRepairs,
@@ -69,6 +70,7 @@ function messageForCode(code: string | undefined): string {
 }
 
 interface FunctionReply {
+  title?: unknown;
   questions?: unknown;
   error?: { code?: string; message?: string };
   /**
@@ -159,7 +161,7 @@ export async function generateQuiz(options: GenerateOptions): Promise<GenerateOu
   // and the questions exist; telling the teacher the generator was
   // unreachable would be untrue and would send them to retry for nothing.
   try {
-    return await save(options, outcome);
+    return await save(options, outcome, typeof data?.title === 'string' ? data.title : null);
   } catch {
     throw new GenerationError(S.generate.saveFailed);
   }
@@ -168,8 +170,9 @@ export async function generateQuiz(options: GenerateOptions): Promise<GenerateOu
 async function save(
   options: GenerateOptions,
   outcome: GenerationOutcome,
+  suggested: string | null,
 ): Promise<GenerateOutcome> {
-  const quizId = await createQuiz(titleFor(options.topic));
+  const quizId = await createQuiz(quizTitle(suggested, options.topic));
   await insertQuestions(
     quizId,
     outcome.kept.map((question, index) => ({
@@ -305,10 +308,41 @@ export async function regenerateQuestion(options: {
  * A title from the teacher's topic, so the quiz list is readable without
  * anyone having to rename everything by hand.
  */
+/**
+ * What to call a generated quiz.
+ *
+ * The teacher's topic is a brief, not a name. "Python for loops using lists
+ * and enumerate() for intermediate students" says exactly what they wanted
+ * and is a poor thing to read in a list, so the model is asked for a short
+ * name and that is used when it gives one.
+ *
+ * The topic stays as the fallback, cut as before. A quiz with no name is
+ * worse than a quiz with a long one.
+ */
+export function quizTitle(suggested: string | null, topic: string): string {
+  const clean = (suggested ?? '').trim().replace(/\s+/g, ' ');
+  // A "short name" long enough to be cut is not a name the model understood
+  // the request for, so fall back rather than truncate it into nonsense.
+  if (clean !== '' && clean.length <= MAX_GENERATED_TITLE) {
+    return clean.charAt(0).toUpperCase() + clean.slice(1);
+  }
+  return titleFor(topic);
+}
+
+/** Comfortably past "a few words", so only a runaway name is rejected. */
+const MAX_GENERATED_TITLE = 60;
+
 export function titleFor(topic: string): string {
   const clean = topic.trim().replace(/\s+/g, ' ');
   if (clean === '') return S.quizzes.untitled;
-  // Long enough to tell two quizzes apart, short enough for the list.
-  const cut = clean.length > 60 ? `${clean.slice(0, 57).trimEnd()}…` : clean;
+  // Cut only at what the column will hold, not at what the list looks good
+  // at. This used to stop at 60 and save the ellipsis, so the rest of the
+  // teacher's words were gone for good and no amount of hovering brought
+  // them back. The list truncates for display and has the full text in a
+  // tooltip, which is where that decision belongs.
+  const cut =
+    clean.length > MAX_TITLE_LENGTH
+      ? `${clean.slice(0, MAX_TITLE_LENGTH - 1).trimEnd()}…`
+      : clean;
   return cut.charAt(0).toUpperCase() + cut.slice(1);
 }
