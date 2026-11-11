@@ -281,6 +281,7 @@ export const S = {
     showResultsNow: 'Show results now',
     resultsHeading: (n: number, total: number) =>
       `Question ${n} of ${total} · Results`,
+    theQuestion: 'The question',
     correctAnswer: 'Correct answer',
     explanation: 'Explanation',
     leaderboard: 'Leaderboard',
