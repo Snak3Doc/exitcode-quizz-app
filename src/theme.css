@@ -750,6 +750,15 @@ textarea.code-input {
   box-shadow: 0 0 0 2px rgba(74, 222, 128, 0.14);
 }
 
+/*
+  An option that was not the answer, on a results screen. Still readable --
+  the class is being shown what they chose between -- but it should never
+  compete with the one that is right.
+*/
+.option.is-dim {
+  opacity: 0.55;
+}
+
 label.option {
   cursor: pointer;
 }
