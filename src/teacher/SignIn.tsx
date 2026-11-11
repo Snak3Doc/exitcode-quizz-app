@@ -83,7 +83,7 @@ export function SignIn() {
 
   return (
     <main className="centre-page">
-      <h1 className="narrow dollar" style={{ textAlign: 'center' }}>
+      <h1 className="narrow app-mark" style={{ textAlign: 'center' }}>
         {S.app.name}
       </h1>
 

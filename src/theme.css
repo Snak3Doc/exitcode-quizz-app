@@ -92,9 +92,27 @@ h2 {
   color: var(--accent);
 }
 
-.dollar::before {
-  content: '$ ';
-  color: var(--accent);
+/*
+  The app's mark: the Material Symbols "terminal" glyph, outlined, weight 400,
+  which replaced a literal "$". Drawn as a mask rather than an image so it
+  takes its colour from --accent and stays exactly the green the $ was.
+*/
+:root {
+  --terminal-mark: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%20-960%20960%20960'%3E%3Cpath%20d='M160-160q-33%200-56.5-23.5T80-240v-480q0-33%2023.5-56.5T160-800h640q33%200%2056.5%2023.5T880-720v480q0%2033-23.5%2056.5T800-160H160Zm0-80h640v-400H160v400Zm140-40-56-56%20103-104-104-104%2057-56%20160%20160-160%20160Zm180%200v-80h240v80H480Z'/%3E%3C/svg%3E");
+}
+
+.app-mark::before,
+.brand::before {
+  content: '';
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  /* Sits on the baseline where the character used to. */
+  vertical-align: -0.14em;
+  margin-right: 0.4em;
+  background-color: var(--accent);
+  -webkit-mask: var(--terminal-mark) no-repeat center / contain;
+  mask: var(--terminal-mark) no-repeat center / contain;
 }
 
 .dim {
@@ -254,11 +272,6 @@ a {
 .brand {
   font-weight: 700;
   letter-spacing: 0.02em;
-}
-
-.brand::before {
-  content: '$ ';
-  color: var(--accent);
 }
 
 /* ---------- bordered "window" boxes ---------- */
