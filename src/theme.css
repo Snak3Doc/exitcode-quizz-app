@@ -674,13 +674,27 @@ textarea.code-input {
 }
 
 .share-code {
+  --code-gap: clamp(0.4rem, 3vw, 2rem);
   font-size: clamp(2.6rem, 1rem + 9vw, 8rem);
   font-weight: 700;
-  letter-spacing: clamp(0.3rem, 2vw, 1.2rem);
+  letter-spacing: var(--code-gap);
+  /*
+    letter-spacing puts a gap after the last letter too, which both pushed the
+    code wider than it needs and left it sitting half a gap off centre. Taking
+    that gap back off the right edge fixes the width and the centring at once.
+  */
+  margin-right: calc(-1 * var(--code-gap));
   color: var(--accent);
   text-align: center;
   line-height: 1.15;
-  word-break: break-all;
+  /* Six characters are one thing to read, never two lines. */
+  white-space: nowrap;
+}
+
+/* The address a student types, worth finding as fast as the code itself. */
+.join-site {
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .timer {

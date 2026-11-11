@@ -214,9 +214,16 @@ function Lobby({
         <div className="title-bar">{S.app.name}</div>
         <div className="body big-centre">
           <p className="dim" style={{ margin: 0 }}>
-            {S.host.joinInstructions(window.location.host)}
+            {S.host.joinInstructionsBefore}{' '}
+            <span className="join-site">{window.location.host}</span>{' '}
+            {S.host.joinInstructionsAfter}
           </p>
-          <div className="share-code cursor">{code.split('').join(' ')}</div>
+          {/*
+            The letters are spaced by letter-spacing alone. Joining them with
+            literal spaces as well doubled every gap, which is what pushed the
+            last character onto a second line on every screen size.
+          */}
+          <div className="share-code cursor">{code}</div>
           <p style={{ margin: 0 }}>
             {S.host.quizLine(quiz.title, quiz.questions.length)}
           </p>
