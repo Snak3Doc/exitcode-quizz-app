@@ -62,7 +62,7 @@ export type GeminiFailure =
   | { kind: 'unreadable'; detail: string };
 
 export type GeminiResult =
-  | { ok: true; model: string; questions: unknown[] }
+  | { ok: true; model: string; title: string | null; questions: unknown[] }
   | { ok: false; failure: GeminiFailure };
 
 export interface GeminiCall {
@@ -131,16 +131,22 @@ function sliceFor(timeLeft: number, modelsStillToCome: number): number {
   return share > 0 ? share : Math.min(MIN_MODEL_SLICE_MS, timeLeft);
 }
 
-/** Pull the questions array out of a successful response. */
-function readQuestions(text: string): unknown[] | null {
+/** Pull the quiz out of a successful response. */
+function readQuiz(text: string): { title: string | null; questions: unknown[] } | null {
   try {
     const body = JSON.parse(text) as {
       candidates?: { content?: { parts?: { text?: string }[] } }[];
     };
     const raw = body.candidates?.[0]?.content?.parts?.[0]?.text;
     if (typeof raw !== 'string') return null;
-    const parsed = JSON.parse(raw) as { questions?: unknown };
-    return Array.isArray(parsed.questions) ? parsed.questions : null;
+    const parsed = JSON.parse(raw) as { title?: unknown; questions?: unknown };
+    if (!Array.isArray(parsed.questions)) return null;
+    // A missing title is not a failure: the caller has the teacher's topic to
+    // fall back on, and losing a whole quiz over its name would be absurd.
+    const title = typeof parsed.title === 'string' && parsed.title.trim() !== ''
+      ? parsed.title.trim()
+      : null;
+    return { title, questions: parsed.questions };
   } catch {
     return null;
   }
@@ -191,14 +197,14 @@ export async function generateQuiz(call: GeminiCall): Promise<GeminiResult> {
       );
 
       if (status === 200) {
-        const questions = readQuestions(text);
-        if (questions === null) {
+        const quiz = readQuiz(text);
+        if (quiz === null) {
           return {
             ok: false,
             failure: { kind: 'unreadable', detail: text.slice(0, 500) },
           };
         }
-        return { ok: true, model, questions };
+        return { ok: true, model, title: quiz.title, questions: quiz.questions };
       }
 
       const suggested = /use models\/([A-Za-z0-9._-]+)/.exec(text)?.[1];
