@@ -14,6 +14,7 @@
 
 import { DEFAULT_TIME_LIMIT_SECONDS } from './constants';
 import { checkQuestion } from './schema';
+import { CODE_LANGUAGES } from './types';
 import type { CodeLanguage, QuestionType, TimingMode } from './types';
 import type { QuizFileQuestion } from './quiz-file';
 
@@ -59,9 +60,38 @@ function id(): string {
  * `checkQuestion()` to report. Guessing at a repair here would turn a question
  * the teacher could have been told about into one that is quietly wrong.
  */
+/**
+ * A language the app can actually highlight, or the next best thing.
+ *
+ * The model leaves this out more often than it gets it wrong, and a code
+ * option with no language is not a broken question -- it is a question
+ * missing one attribute that can be worked out. Dropping it over that threw
+ * away six perfectly good questions out of twelve in one measured run
+ * (2026-11-13, `gemini-3.1-flash-lite`), every one of them for this reason
+ * alone and nothing else.
+ *
+ * The same reasoning was already applied to the question's own code block,
+ * which has defaulted to `plaintext` since the start. This just extends it to
+ * the options, and to a language the model spelled in a way the app does not
+ * recognise -- `Python` or `py` fail the enum exactly as a missing one does.
+ */
+function codeLanguageOr(value: unknown, fallback: CodeLanguage): CodeLanguage {
+  if (typeof value !== 'string') return fallback;
+  const tidied = value.trim().toLowerCase();
+  return (CODE_LANGUAGES as readonly string[]).includes(tidied)
+    ? (tidied as CodeLanguage)
+    : fallback;
+}
+
 export function normaliseContent(
   type: QuestionType,
   raw: unknown,
+  /**
+   * What the question's own code block is written in, used when an option or
+   * a snippet does not say. A quiz question's options are nearly always in
+   * the same language as the code above them.
+   */
+  questionLanguage: CodeLanguage = 'plaintext',
 ): Record<string, unknown> {
   const content = (raw ?? {}) as Record<string, unknown>;
 
@@ -77,10 +107,10 @@ export function normaliseContent(
             id: id(),
             kind,
             // The language only belongs on a code option; carrying it on a
-            // text one would show up as a stray field in the editor.
-            ...(kind === 'code' && typeof o.language === 'string'
-              ? { language: o.language as CodeLanguage }
-              : {}),
+            // text one would show up as a stray field in the editor. When the
+            // model leaves it off a code one, fall back rather than lose the
+            // question -- see `codeLanguageOr`.
+            ...(kind === 'code' ? { language: codeLanguageOr(o.language, questionLanguage) } : {}),
             text: text(o.text),
             correct: o.correct === true,
           };
@@ -112,7 +142,7 @@ export function normaliseContent(
         }
       }
       return {
-        language: content.language,
+        language: codeLanguageOr(content.language, questionLanguage),
         snippet: text(content.snippet),
         wordBank: Array.isArray(content.wordBank) ? content.wordBank.map(text) : [],
         answers,
@@ -121,7 +151,7 @@ export function normaliseContent(
 
     case 'order_lines':
       return {
-        language: content.language,
+        language: codeLanguageOr(content.language, questionLanguage),
         // The model sends plain strings; the app stores {id, text}. Order is
         // preserved exactly — these are the lines in their correct order and
         // the app shuffles them for students at run time.
@@ -139,6 +169,9 @@ export function normaliseQuestion(
   timing: TimingChoice,
 ): NormalisedQuestion {
   const code = optionalText(raw.code);
+  // What the question is written in, which is also the best guess for any
+  // option or snippet inside it that does not say.
+  const language = codeLanguageOr(raw.codeLanguage, 'plaintext');
 
   const question: QuizFileQuestion = {
     type,
@@ -146,12 +179,12 @@ export function normaliseQuestion(
     code,
     // The database insists these two are both set or both null, so a code
     // block with no language, or a language with no code, cannot be stored.
-    codeLanguage: code === null ? null : ((optionalText(raw.codeLanguage) ?? 'plaintext') as CodeLanguage),
+    codeLanguage: code === null ? null : language,
     timingMode: timing.mode,
     timeLimitSeconds:
       timing.mode === 'timed' ? (timing.seconds ?? DEFAULT_TIME_LIMIT_SECONDS) : null,
     explanation: optionalText(raw.explanation),
-    content: normaliseContent(type, raw.content),
+    content: normaliseContent(type, raw.content, language),
   };
 
   return { question, problems: checkQuestion(question) };

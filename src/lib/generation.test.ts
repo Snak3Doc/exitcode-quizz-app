@@ -198,6 +198,83 @@ describe('converting a generated question', () => {
     expect(options[0].id).not.toBe('');
   });
 
+  it('gives a code option the question\'s language when the model omits it', () => {
+    // Measured 2026-11-13: six of twelve questions from gemini-3.1-flash-lite
+    // were thrown away, every one of them for "a code option has no
+    // language" and nothing else. The question was fine; one attribute was
+    // missing, and it is the same language as the code block above it.
+    const { question, problems } = normaliseQuestion(
+      'mc_single',
+      {
+        prompt: 'Which slice returns the last two items?',
+        code: 'nums = [1, 2, 3, 4]',
+        codeLanguage: 'python',
+        explanation: 'A negative start counts back from the end.',
+        content: {
+          options: [
+            { kind: 'code', text: 'nums[-2:]', correct: true },
+            { kind: 'code', text: 'nums[2:]', correct: false },
+          ],
+        },
+      },
+      { mode: 'wait' },
+    );
+
+    expect(problems).toEqual([]);
+    const options = question.content.options as { language?: string }[];
+    expect(options[0].language).toBe('python');
+    expect(options[1].language).toBe('python');
+  });
+
+  it('falls back to plaintext when there is no question language either', () => {
+    const { question, problems } = normaliseQuestion(
+      'mc_single',
+      {
+        prompt: 'Which command lists files?',
+        explanation: 'ls lists the current directory.',
+        content: {
+          options: [
+            { kind: 'code', text: 'ls', correct: true },
+            { kind: 'code', text: 'cd', correct: false },
+          ],
+        },
+      },
+      { mode: 'wait' },
+    );
+
+    expect(problems).toEqual([]);
+    expect((question.content.options as { language?: string }[])[0].language).toBe('plaintext');
+  });
+
+  it('accepts a language the model spelled its own way', () => {
+    // `Python` and `py` fail the enum exactly as a missing one does, and
+    // lose the question for exactly as little reason.
+    const content = normaliseContent(
+      'mc_single',
+      { options: [{ kind: 'code', text: 'print(x)', correct: true, language: 'Python' }] },
+      'plaintext',
+    );
+    expect((content.options as { language?: string }[])[0].language).toBe('python');
+  });
+
+  it('still leaves a text option without a language', () => {
+    // Carrying one would show up as a stray field in the editor.
+    const content = normaliseContent(
+      'mc_single',
+      { options: [{ kind: 'text', text: 'A list', correct: true }] },
+      'python',
+    );
+    expect((content.options as { language?: string }[])[0].language).toBeUndefined();
+  });
+
+  it('gives a snippet and a set of lines the same fallback', () => {
+    const blank = normaliseContent('fill_blank', { snippet: 'x = {{1}}', wordBank: [], answers: [] }, 'python');
+    expect(blank.language).toBe('python');
+
+    const lines = normaliseContent('order_lines', { lines: ['a = 1'] }, 'javascript');
+    expect(lines.language).toBe('javascript');
+  });
+
   it('rebuilds the fill-in-the-blank answer map from the list', () => {
     const content = normaliseContent('fill_blank', {
       language: 'python',
