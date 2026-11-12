@@ -31,6 +31,7 @@ import {
   forgetSpentQuota,
   generateQuiz,
   retryDelayMs,
+  thinkingLevelFor,
   type GeminiCall,
 } from '../../supabase/functions/generate-quiz/gemini';
 
@@ -773,6 +774,150 @@ describe('how much of this worker is left to spend', () => {
     const nearlyDone = booted + WORKER_WALL_CLOCK_MS - WORKER_SAFETY_MS - 5_000;
     expect(budgetWithin(booted, nearlyDone)).toBeGreaterThan(0);
     expect(budgetWithin(booted, nearlyDone)).toBeLessThan(MIN_USEFUL_BUDGET_MS);
+  });
+});
+
+// ---------- how the request is put together ----------
+
+/** A fetch whose arguments are typed, so the request body can be read back. */
+function spying(respond: (url: string) => Response) {
+  return vi.fn(async (url: string, _init: RequestInit) => respond(url));
+}
+
+function bodySent(
+  fetchImpl: { mock: { calls: [string, RequestInit][] } },
+  nth = 0,
+): { generationConfig: { thinkingConfig?: { thinkingLevel?: string } } } {
+  return JSON.parse(String(fetchImpl.mock.calls[nth][1].body));
+}
+
+const oneQuestion = () => reply(200, successBody([{ type: 'true_false' }]));
+
+describe('how hard the model is told to think', () => {
+  beforeEach(() => {
+    forgetSpentQuota();
+  });
+
+  it('leaves the flash-lite models alone, which already think none', () => {
+    // Measured 2026-11-12: both came back with thoughtsTokenCount 0. There is
+    // nothing to turn down, and asking would only risk a 400 for no gain.
+    expect(thinkingLevelFor('gemini-3.5-flash-lite')).toBeNull();
+    expect(thinkingLevelFor('gemini-3.1-flash-lite')).toBeNull();
+  });
+
+  it('turns the full flash models down, which think by default', () => {
+    expect(thinkingLevelFor('gemini-3.6-flash')).toBe('LOW');
+    expect(thinkingLevelFor('gemini-3.8-flash')).toBe('LOW');
+  });
+
+  it('asks for nothing from a model it does not recognise', () => {
+    expect(thinkingLevelFor('gemini-4-carbon')).toBeNull();
+  });
+
+  it('sends no thinkingConfig at all when there is none to send', async () => {
+    const fetchImpl = spying(() => oneQuestion());
+    await generateQuiz(call(fetchImpl as unknown as typeof fetch, ['gemini-3.5-flash-lite']));
+
+    expect(bodySent(fetchImpl).generationConfig.thinkingConfig).toBeUndefined();
+  });
+
+  it('turns it down for a model that would otherwise think by default', async () => {
+    const fetchImpl = spying(() => oneQuestion());
+    await generateQuiz(call(fetchImpl as unknown as typeof fetch, ['gemini-3.6-flash']));
+
+    expect(bodySent(fetchImpl).generationConfig.thinkingConfig).toEqual({ thinkingLevel: 'LOW' });
+  });
+
+  it('asks again without one when the model refuses the level', async () => {
+    // The trap this exists for. Measured 2026-11-12: 3.8-flash answers
+    // `Thinking level MINIMAL is not supported for this model` with a 400 --
+    // and a 400 otherwise ends the whole generation, so one model's opinion
+    // about thinking would take the feature down.
+    const refusal = JSON.stringify({
+      error: { code: 400, message: 'Thinking level LOW is not supported for this model.' },
+    });
+    const fetchImpl = vi
+      .fn(async (_url: string, _init: RequestInit) => oneQuestion())
+      .mockResolvedValueOnce(reply(400, refusal));
+
+    const result = await generateQuiz(
+      call(fetchImpl as unknown as typeof fetch, ['gemini-3.6-flash']),
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.thinkingDropped).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    // And the second ask carried no thinking config, or it would refuse again.
+    expect(bodySent(fetchImpl, 1).generationConfig.thinkingConfig).toBeUndefined();
+  });
+
+  it('still gives up on a 400 that is about the request, not the model', async () => {
+    // The distinction that matters: a bad schema fails identically everywhere,
+    // so trying more models only spends more of the day's allowance.
+    const fetchImpl = spying(() => reply(400, 'bad schema'));
+    const result = await generateQuiz(
+      call(fetchImpl as unknown as typeof fetch, ['gemini-3.6-flash', 'gemini-3.5-flash-lite']),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.kind).toBe('rejected');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('how the API key travels', () => {
+  beforeEach(() => {
+    forgetSpentQuota();
+  });
+
+  it('goes in a header, never in the URL', async () => {
+    // A query string is logged by every proxy between here and Google, which
+    // rather undoes keeping this call on the server in the first place.
+    const fetchImpl = spying(() => oneQuestion());
+    await generateQuiz(call(fetchImpl as unknown as typeof fetch, ['gemini-3.5-flash-lite']));
+
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).not.toContain('test-key');
+    expect(url).not.toContain('key=');
+    expect((init.headers as Record<string, string>)['x-goog-api-key']).toBe('test-key');
+  });
+});
+
+describe('what the answer cost', () => {
+  beforeEach(() => {
+    forgetSpentQuota();
+  });
+
+  it('carries the token counts back, so the next outage is readable', async () => {
+    const answered = JSON.stringify({
+      candidates: [
+        {
+          finishReason: 'STOP',
+          content: { parts: [{ text: JSON.stringify({ questions: [{ type: 'true_false' }] }) }] },
+        },
+      ],
+      usageMetadata: { promptTokenCount: 812, thoughtsTokenCount: 0, candidatesTokenCount: 1838 },
+      modelVersion: 'gemini-3.5-flash-lite',
+    });
+    const result = await generateQuiz(
+      call(spying(() => reply(200, answered)) as unknown as typeof fetch),
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      // Zero thinking tokens is the fact that would have explained a week of
+      // "the model accepted the connection and never answered".
+      expect(result.usage.thoughtTokens).toBe(0);
+      expect(result.usage.outputTokens).toBe(1838);
+      expect(result.usage.modelVersion).toBe('gemini-3.5-flash-lite');
+    }
+  });
+
+  it('does not fail a quiz just because nothing said what it cost', async () => {
+    const result = await generateQuiz(call(spying(() => oneQuestion()) as unknown as typeof fetch));
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.usage.thoughtTokens).toBeUndefined();
   });
 });
 

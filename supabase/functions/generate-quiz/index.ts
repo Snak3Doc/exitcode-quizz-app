@@ -224,7 +224,16 @@ Deno.serve(async (request: Request): Promise<Response> => {
     return fail('generation_failed', 'Generation did not work this time.', 502);
   }
 
-  console.log(`Generated ${result.questions.length} question(s) with ${result.model}.`);
+  // What it cost, so the next outage is readable from the logs rather than
+  // guessed at. When 3.8 and 3.7 flash went quiet it took a week to work out
+  // they were thinking, not broken; `thought=` would have said so on day one.
+  const { usage } = result;
+  console.log(
+    `Generated ${result.questions.length} question(s) with ${result.model}` +
+      `${result.thinkingDropped ? ' (thinking level refused, asked again without it)' : ''}: ` +
+      `prompt=${usage.promptTokens ?? '?'} thought=${usage.thoughtTokens ?? '?'} ` +
+      `out=${usage.outputTokens ?? '?'} served-by=${usage.modelVersion ?? '?'}`,
+  );
 
   // The questions go back raw. Converting and validating them happens in the
   // browser, where `checkQuestion()` already judges imported questions, so
