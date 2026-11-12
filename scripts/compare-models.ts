@@ -2,7 +2,8 @@
  * Compare the question quality of the models in the list, head to head.
  *
  *   npx vite-node scripts/compare-models.ts
- *   npx vite-node scripts/compare-models.ts --self-check   (costs nothing)
+ *   npx vite-node scripts/compare-models.ts --self-check    (costs nothing)
+ *   npx vite-node scripts/compare-models.ts --report-only   (costs nothing)
  *
  * The list in `gemini.ts` is ordered by daily allowance rather than by
  * capability, which was the right call for reliability and was made without
@@ -243,6 +244,51 @@ async function askOne(model: string, topic: string): Promise<Checked> {
  * a model marking a wrong answer as correct. A scoreboard that libels a model
  * is worse than no scoreboard, so the scoreboard gets its own tests.
  */
+/** One of each awkward shape the report has to survive, and no requests. */
+function sampleResults(): Checked[] {
+  return [
+    {
+      model: 'model-a',
+      topic: 'Python something',
+      kept: 1,
+      dropped: [{ number: 2, problems: ['a code option has no language'] }],
+      ms: 4200,
+      ran: [
+        {
+          prompt: 'What does this code print?',
+          code: 'print(1)',
+          marked: '2',
+          printed: '1',
+          agrees: false,
+          formattingOnly: false,
+        },
+      ],
+      questions: [
+        {
+          type: 'mc_single',
+          prompt: 'What does this code print?',
+          code: 'print(1)',
+          codeLanguage: 'python',
+          explanation: 'It prints 1.',
+          content: { options: [{ kind: 'code', text: 'print(1)', correct: true }] },
+        },
+        { type: 'true_false', prompt: 'A list is ordered.', content: { correct: true } },
+        { type: 'short_text', prompt: 'Which method appends?', content: { accepted: ['append'] } },
+      ] as unknown as GeneratedQuestion[],
+    },
+    {
+      model: 'model-b',
+      topic: 'Python something else',
+      kept: 0,
+      dropped: [],
+      ms: 900,
+      ran: [],
+      questions: [],
+      failure: '{"kind":"unavailable","detail":"quota is spent"}',
+    },
+  ];
+}
+
 function selfCheck(): void {
   const cases: { name: string; pass: boolean }[] = [
     {
@@ -281,6 +327,24 @@ function selfCheck(): void {
       name: 'and so is a near miss',
       pass: !sameAnswer('0\n1\n2', '0\n1\n2\n3'),
     },
+    {
+      // Otherwise a typo in the report writer only surfaces after the run has
+      // already spent a model's day, with the results stuck in the JSON.
+      name: 'the report renders, including the awkward shapes',
+      pass: (() => {
+        try {
+          const report = renderReport(sampleResults());
+          return (
+            report.includes('## Results') &&
+            report.includes('## Every question, to read') &&
+            report.includes('**disagrees**') &&
+            report.includes('daily quota spent')
+          );
+        } catch {
+          return false;
+        }
+      })(),
+    },
   ];
 
   let failed = 0;
@@ -293,6 +357,208 @@ function selfCheck(): void {
 }
 
 if (selfChecking) selfCheck();
+
+/**
+ * `--report-only`: rebuild the report from the last run's saved results.
+ *
+ * The questions are the expensive part and they are already on disk. Changing
+ * how the report reads should not cost another model its day.
+ */
+if (process.argv.includes('--report-only')) {
+  const saved = JSON.parse(
+    readFileSync(new URL('../model-comparison.json', import.meta.url), 'utf8'),
+  ) as Checked[];
+  writeFileSync(new URL('../model-comparison.md', import.meta.url), renderReport(saved), 'utf8');
+  console.log(`Rebuilt model-comparison.md from ${saved.length} saved results. No requests spent.`);
+  process.exit(0);
+}
+
+/**
+ * Write the whole thing out as something a teacher can read and judge.
+ *
+ * The numbers above say whether a question is *usable* and whether its answer
+ * is *right*. Neither says whether it is worth asking, which is the part that
+ * actually decides this question -- so every question goes in the report, with
+ * its options, its explanation and, where it was run, what Python really
+ * printed.
+ */
+function renderReport(saved: readonly Checked[]): string {
+  const out: string[] = [];
+  const w = (line = '') => out.push(line);
+  const field = (q: GeneratedQuestion, name: string) =>
+    (q as Record<string, unknown>)[name];
+
+  // Judge again rather than trusting what was recorded at the time. The
+  // questions are the expensive part and they do not change; the checker does,
+  // and it has been wrong. An old run re-rendered through a fixed checker
+  // should get the fixed verdict, not keep the one that was wrong.
+  const results = saved.map((r) => ({
+    ...r,
+    ran: r.ran.map((x) => ({
+      ...x,
+      agrees: sameAnswer(x.printed, x.marked),
+      formattingOnly: sameAnswer(x.printed, x.marked) && tidy(x.printed) !== tidy(x.marked),
+    })),
+  }));
+
+  const done = results.filter((r) => !r.failure);
+  const totals = {
+    questions: done.reduce((n, r) => n + r.questions.length, 0),
+    kept: done.reduce((n, r) => n + r.kept, 0),
+    ran: done.reduce((n, r) => n + r.ran.length, 0),
+    right: done.reduce((n, r) => n + r.ran.filter((x) => x.agrees).length, 0),
+  };
+
+  w('# Which model writes better questions?');
+  w();
+  w(`Generated ${new Date().toISOString().slice(0, 10)} by \`scripts/compare-models.ts\`.`);
+  w('Same topics, same prompts, same schema for every model — the real');
+  w('`buildSystemPrompt`, `buildUserPrompt` and `quizSchemaFor`, through the same');
+  w('`generateQuiz` the Edge Function runs.');
+  w();
+  w('## How each question was checked');
+  w();
+  w('1. **`checkQuestion()`** — the same validator that judges an imported quiz file,');
+  w('   so "usable at all" is measured rather than eyeballed.');
+  w('2. **Python** — every question that shows code and asks what it *prints* was');
+  w('   actually executed, and the output compared to the answer marked correct.');
+  w();
+  w('What neither can judge is whether a question is worth asking. That part is below,');
+  w('question by question.');
+  w();
+  w('## Results');
+  w();
+  w('| Model | Topic | Usable | Answers run | Right | Time |');
+  w('|---|---|---|---|---|---|');
+  for (const r of results) {
+    const topic = r.topic.replace(/^Python /, '').slice(0, 38);
+    if (r.failure) {
+      const why = r.failure.includes('quota') ? 'daily quota spent' : 'busy (503)';
+      w(`| \`${r.model}\` | ${topic} | — | — | — | *${why}* |`);
+      continue;
+    }
+    const right = r.ran.filter((x) => x.agrees).length;
+    w(
+      `| \`${r.model}\` | ${topic} | **${r.kept}/${r.questions.length}** | ${r.ran.length} | ` +
+        `${r.ran.length === 0 ? '—' : `${right}/${r.ran.length}`} | ${(r.ms / 1000).toFixed(1)}s |`,
+    );
+  }
+  w();
+  w(`Across every quiz that came back: **${totals.kept} of ${totals.questions} usable**, and of the`);
+  w(`${totals.ran} answers that could be checked by running the code, **${totals.right} were right**.`);
+  if (totals.ran > 0 && totals.right === totals.ran) {
+    w();
+    w('**No model marked a wrong answer as correct.**');
+  }
+  w();
+
+  const refused = done.filter((r) => r.dropped.length > 0);
+  w('## Questions the validator refused');
+  w();
+  if (refused.length === 0) {
+    w('None.');
+  } else {
+    w('```');
+    for (const r of refused) {
+      for (const d of r.dropped) w(`${r.model}  q${d.number}: ${d.problems.join('; ')}`);
+    }
+    w('```');
+  }
+  w();
+
+  const wrong = done.flatMap((r) => r.ran.filter((x) => !x.agrees).map((x) => ({ r, x })));
+  w('## Answers that disagree with Python');
+  w();
+  if (wrong.length === 0) {
+    w('None. Every checkable answer matched what the code actually printed.');
+  } else {
+    w('**Read each of these before believing it.** This checker has reported false');
+    w('positives before — a count compared against stdout, prose compared against an');
+    w('empty output — and a scoreboard that libels a model is worse than no scoreboard.');
+    w();
+    for (const { r, x } of wrong) {
+      w(`**\`${r.model}\`** — ${x.prompt}`);
+      w();
+      w('```python');
+      w(x.code);
+      w('```');
+      w();
+      w(`- marked correct: \`${JSON.stringify(x.marked)}\``);
+      w(`- Python printed: \`${JSON.stringify(x.printed)}\``);
+      w();
+    }
+  }
+  w();
+
+  w('## Every question, to read');
+  w();
+  for (const r of done) {
+    w(`### \`${r.model}\` — ${r.topic}`);
+    w();
+    r.questions.forEach((q, index) => {
+      const dropped = r.dropped.find((d) => d.number === index + 1);
+      w(
+        `**${index + 1}. ${String(field(q, 'prompt') ?? '')}**  <br>*${String(field(q, 'type') ?? '')}*` +
+          `${dropped ? ` — **dropped:** ${dropped.problems.join('; ')}` : ''}`,
+      );
+      w();
+      const code = field(q, 'code');
+      if (typeof code === 'string' && code !== '') {
+        w('```' + String(field(q, 'codeLanguage') ?? ''));
+        w(code);
+        w('```');
+        w();
+      }
+      const content = (field(q, 'content') ?? {}) as {
+        options?: { text?: string; correct?: boolean; kind?: string; language?: string }[];
+        correct?: boolean;
+        accepted?: string[];
+      };
+      if (Array.isArray(content.options)) {
+        for (const option of content.options) {
+          const body =
+            option.kind === 'code'
+              ? `\`${String(option.text).replace(/\n/g, ' ⏎ ')}\``
+              : String(option.text);
+          const noLanguage = option.kind === 'code' && !option.language ? '  ← *no language*' : '';
+          w(`- ${option.correct ? '**✔**' : '○'} ${body}${noLanguage}`);
+        }
+      } else if (typeof content.correct === 'boolean') {
+        w(`- Answer: **${content.correct ? 'True' : 'False'}**`);
+      } else if (Array.isArray(content.accepted)) {
+        w(`- Accepts: ${content.accepted.map((a) => `\`${a}\``).join(', ')}`);
+      }
+      w();
+      const explanation = field(q, 'explanation');
+      if (typeof explanation === 'string' && explanation !== '') {
+        w(`> ${explanation}`);
+        w();
+      }
+      const run = r.ran.find((x) => x.prompt === field(q, 'prompt'));
+      if (run) {
+        w(
+          `*Ran it:* Python printed \`${JSON.stringify(run.printed)}\`, marked \`${JSON.stringify(run.marked)}\`` +
+            ` — ${run.agrees ? (run.formattingOnly ? 'agrees, though laid out differently' : 'agrees') : '**disagrees**'}.`,
+        );
+        w();
+      }
+    });
+  }
+
+  const missing = results.filter((r) => r.failure).length;
+  w('## What this does not settle');
+  w();
+  if (missing > 0) {
+    w(`${missing} of ${results.length} model/topic pairs never answered, so the grid has holes.`);
+    w('Draw nothing from a column a model was never able to fill.');
+    w();
+  }
+  w('`gemini-3.6-flash` is rationed at twenty requests a day, so it runs out fast and is');
+  w('usually the thinnest column here. One afternoon of a congested free tier is a data');
+  w('point, not a finding — re-run this across a few days before treating it as settled.');
+
+  return out.join('\n');
+}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -332,4 +598,5 @@ writeFileSync(
   JSON.stringify(results, null, 2),
   'utf8',
 );
-console.log('\nRaw results written to model-comparison.json');
+writeFileSync(new URL('../model-comparison.md', import.meta.url), renderReport(results), 'utf8');
+console.log('\nRaw results in model-comparison.json, the readable version in model-comparison.md');
