@@ -12,3 +12,8 @@ coverage
 # Supabase CLI scratch state. Holds a pooler connection URL, among other
 # things, so it has no business in the repository.
 supabase/.temp/
+
+# What scripts/compare-models.ts writes. A snapshot of one afternoon's free
+# tier, which is weather rather than source: worth reading once, not keeping.
+model-comparison.json
+model-comparison.md
