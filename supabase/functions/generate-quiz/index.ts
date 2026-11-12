@@ -20,7 +20,13 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
-import { DEFAULT_MODELS, generateQuiz } from './gemini.ts';
+import {
+  DEFAULT_MODELS,
+  MIN_USEFUL_BUDGET_MS,
+  OUT_FOR_THE_DAY_MS,
+  budgetWithin,
+  generateQuiz,
+} from './gemini.ts';
 import { buildRepairPrompt, buildSystemPrompt, buildUserPrompt } from './prompt.ts';
 import { checkRequest, isRepair, type GenerateRequest } from './request.ts';
 import { quizSchemaFor } from './schema.ts';
@@ -36,9 +42,19 @@ import { quizSchemaFor } from './schema.ts';
  *   unauthenticated       send the teacher back to sign in
  *   not_approved          this account is not on the allowed list
  *   bad_request           the form let through something it should not have
- *   quota_exhausted       busy, rate limited or out of quota -- try later, or
- *                         build the quiz by hand, which is the whole app as it
+ *   quota_exhausted       busy or rate limited -- try again shortly, or build
+ *                         the quiz by hand, which is the whole app as it
  *                         already exists
+ *   out_of_quota_today    the day's free requests are gone on every model, and
+ *                         nothing will work until they reset. Worth its own
+ *                         code: "try again later" sent teachers back every few
+ *                         minutes for the best part of an hour
+ *   topic_blocked         the safety filter refused the topic. Only the
+ *                         teacher can fix this, by rewording it
+ *   too_long              the answer was cut off mid-JSON. Fewer questions fit
+ *   server_busy           this worker has no time left to finish a generation.
+ *                         The next request gets a fresh one, so trying again
+ *                         now genuinely works
  *   generation_failed     the model answered with something unusable; the
  *                         detail is in the function logs, not on screen
  *   server_misconfigured  the operator's problem, not the teacher's. Say so
@@ -77,6 +93,15 @@ function json(body: unknown, status: number): Response {
 function fail(code: string, message: string, status: number): Response {
   return json({ error: { code, message } } satisfies ErrorBody, status);
 }
+
+/**
+ * When this worker booted, which is not when this request arrived.
+ *
+ * Module scope is the whole point: Supabase's wall clock is the worker's, and
+ * a worker serves several requests over its life. Reading the clock here is
+ * the only way to know how much of that life a generation can still have.
+ */
+const workerStartedAt = Date.now();
 
 Deno.serve(async (request: Request): Promise<Response> => {
   if (request.method === 'OPTIONS') {
@@ -148,6 +173,15 @@ Deno.serve(async (request: Request): Promise<Response> => {
     ? [...new Set(body.repair.map((entry) => entry.type))]
     : [...new Set((body as GenerateRequest).types)];
 
+  // What is left of this worker's life, not a fixed guess. A generation that
+  // cannot finish inside it is killed at 546 with nothing to tell anyone, so
+  // it is better not to start -- and better still not to spend a request on it.
+  const budgetMs = budgetWithin(workerStartedAt, Date.now());
+  if (budgetMs < MIN_USEFUL_BUDGET_MS) {
+    console.warn(`Worker has ${budgetMs}ms of budget left; refusing rather than being killed.`);
+    return fail('server_busy', 'The server is out of time for this one.', 503);
+  }
+
   const result = await generateQuiz({
     apiKey: geminiKey,
     models: DEFAULT_MODELS,
@@ -156,16 +190,34 @@ Deno.serve(async (request: Request): Promise<Response> => {
       ? buildRepairPrompt(topic, body.repair)
       : buildUserPrompt({ topic, count: (body as GenerateRequest).count, types }),
     responseSchema: quizSchemaFor(types, !repairing),
+    budgetMs,
   });
 
   if (!result.ok) {
     const { failure } = result;
+
     if (failure.kind === 'unavailable') {
-      // Busy, rate limited or out of quota -- all the same to the teacher, who
-      // can try later or build the quiz by hand as they always could.
       console.warn('Gemini unavailable:', failure.detail);
+      // The one distinction worth making to a teacher: a spike clears in
+      // seconds, a spent daily allowance does not clear until it resets.
+      if (failure.retryAfterMs !== undefined && failure.retryAfterMs > OUT_FOR_THE_DAY_MS) {
+        return fail('out_of_quota_today', "Today's free requests are used up.", 503);
+      }
       return fail('quota_exhausted', 'Generation is unavailable right now.', 503);
     }
+
+    if (failure.kind === 'blocked') {
+      // Not our bug and not a transient one. Retrying is the one thing that
+      // cannot help, so say what would.
+      console.warn('Prompt refused:', failure.detail);
+      return fail('topic_blocked', 'The topic was refused.', 422);
+    }
+
+    if (failure.kind === 'truncated') {
+      console.warn('Answer cut off:', failure.detail);
+      return fail('too_long', 'The answer was cut off before it finished.', 502);
+    }
+
     // A rejected request or unreadable output is our bug, not the teacher's,
     // and the detail belongs in the logs rather than on their screen.
     console.error('Generation failed:', JSON.stringify(failure));

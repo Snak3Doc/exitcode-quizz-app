@@ -102,6 +102,34 @@ describe('what a teacher is told when generation fails', () => {
     );
   });
 
+  it('tells a spent daily allowance apart from a busy minute', async () => {
+    // The same 503 either way. Before these were separate, a teacher whose
+    // free requests were gone for the day was told to "try again later" and
+    // came back every few minutes for the best part of an hour.
+    expect(await messageFrom(failedWith(503, { error: { code: 'quota_exhausted' } }))).toBe(
+      S.generate.unavailable,
+    );
+    expect(await messageFrom(failedWith(503, { error: { code: 'out_of_quota_today' } }))).toBe(
+      S.generate.outOfQuotaToday,
+    );
+    expect(S.generate.outOfQuotaToday).not.toBe(S.generate.unavailable);
+  });
+
+  it('says what would help for the failures the teacher can actually fix', async () => {
+    expect(await messageFrom(failedWith(422, { error: { code: 'topic_blocked' } }))).toBe(
+      S.generate.topicBlocked,
+    );
+    expect(await messageFrom(failedWith(502, { error: { code: 'too_long' } }))).toBe(
+      S.generate.tooLong,
+    );
+    expect(await messageFrom(failedWith(503, { error: { code: 'server_busy' } }))).toBe(
+      S.generate.serverBusy,
+    );
+    // A refused topic is the one case where trying again is the wrong advice.
+    expect(S.generate.topicBlocked).toMatch(/reword/i);
+    expect(S.generate.tooLong).toMatch(/fewer/i);
+  });
+
   it('falls back without blaming the teacher when there is no code to read', async () => {
     const message = await messageFrom({
       data: null,

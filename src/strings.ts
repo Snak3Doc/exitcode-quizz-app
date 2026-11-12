@@ -77,8 +77,20 @@ export const S = {
 
     // Failures, by the code the function returns.
     unavailable:
-      'Generation is busy or out of free requests for now. Try again later, or build ' +
-      'the quiz by hand.',
+      'The generator is busy right now. Try again in a minute, or build the quiz by hand.',
+    // Worth saying apart from the one above. These run out for the day, not
+    // for a moment, and "try again later" had teachers coming back every few
+    // minutes for the best part of an hour to a request that could not work.
+    outOfQuotaToday:
+      "Today's free generations are used up. They reset overnight — until then, " +
+      'build the quiz by hand or duplicate an old one.',
+    topicBlocked:
+      'The generator refused this topic. Trying again will not help, but rewording it ' +
+      'usually does.',
+    tooLong:
+      'The answer was cut off before it finished. Ask for fewer questions and try again.',
+    serverBusy:
+      'The server was out of time for this one. Try again — the next attempt starts fresh.',
     failed: 'Generation did not work this time. Try again.',
     saveFailed:
       'The questions were written but could not be saved. Nothing was lost on your side — ' +

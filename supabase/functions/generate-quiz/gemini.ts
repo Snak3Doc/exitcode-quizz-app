@@ -77,12 +77,48 @@ export const FIRST_BACKOFF_MS = 1_500;
 
 /** Why a generation attempt ended, in terms the caller can act on. */
 export type GeminiFailure =
-  /** Busy, rate limited, or out of quota. The teacher is told to try later. */
-  | { kind: 'unavailable'; detail: string }
+  /**
+   * Busy, rate limited, or out of quota. `retryAfterMs` is set only when
+   * every model has said when it is worth asking again, which is the
+   * difference between "try in a minute" and "that is today's allowance".
+   * Telling a teacher to try again shortly, when nothing can work for the
+   * next fifty minutes, sends them to spend their afternoon on it.
+   */
+  | { kind: 'unavailable'; detail: string; retryAfterMs?: number }
   /** The request itself was wrong — a bad schema or a bad prompt. Our bug. */
   | { kind: 'rejected'; status: number; detail: string }
+  /** The answer was cut off mid-JSON. Fewer questions would fit. */
+  | { kind: 'truncated'; detail: string }
+  /** The safety filter refused the topic. Rewording it is the only fix. */
+  | { kind: 'blocked'; detail: string }
   /** It answered, but not with the JSON we asked for. */
   | { kind: 'unreadable'; detail: string };
+
+/**
+ * How much of a worker's life is left to spend on this request.
+ *
+ * Supabase's wall clock belongs to the **worker**, not the request -- "a
+ * worker can serve multiple requests or process background tasks during this
+ * period" -- so a worker that has already spent sixty seconds on an earlier
+ * generation has ninety left for this one, not a fresh hundred and fifty.
+ * That is why a fixed budget kept being wrong: generations run back to back
+ * poison each other, and the second one is killed at 546 with nothing to say.
+ */
+export const WORKER_WALL_CLOCK_MS = 150_000;
+
+/** Room to answer, log and return after the budget runs out. */
+export const WORKER_SAFETY_MS = 15_000;
+
+/** Below this, there is no point asking anyone anything. */
+export const MIN_USEFUL_BUDGET_MS = MIN_MODEL_SLICE_MS + 3_000;
+
+/** A delay past which "try again later" means a different day, not a moment. */
+export const OUT_FOR_THE_DAY_MS = 10 * 60_000;
+
+export function budgetWithin(workerStartedAt: number, nowMs: number): number {
+  const left = WORKER_WALL_CLOCK_MS - (nowMs - workerStartedAt) - WORKER_SAFETY_MS;
+  return Math.min(TOTAL_BUDGET_MS, Math.max(0, left));
+}
 
 export type GeminiResult =
   | { ok: true; model: string; title: string | null; questions: unknown[] }
@@ -225,29 +261,130 @@ function sliceFor(timeLeft: number, modelsStillToCome: number): number {
   return share > 0 ? share : Math.min(MIN_MODEL_SLICE_MS, timeLeft);
 }
 
-/** Pull the quiz out of a successful response. */
-function readQuiz(text: string): { title: string | null; questions: unknown[] } | null {
+/** A 200 that is not a usable quiz, and which of the three it is. */
+type BadRead = { ok: false; why: 'truncated' | 'blocked' | 'unreadable'; detail: string };
+
+type QuizRead = { ok: true; title: string | null; questions: unknown[] } | BadRead;
+
+/**
+ * Finish reasons that mean the filter stopped it, not that we asked wrongly.
+ *
+ * Kept apart from the other failures because the teacher can act on this one
+ * and only this one: no amount of trying again helps, and rewording the topic
+ * always does.
+ */
+const BLOCKED_FINISHES = new Set([
+  'SAFETY',
+  'PROHIBITED_CONTENT',
+  'BLOCKLIST',
+  'SPII',
+  'RECITATION',
+]);
+
+/**
+ * Pull the quiz out of a successful response, or say why there isn't one.
+ *
+ * A 200 is not the same as an answer. The response carries a `finishReason`
+ * and, when the prompt itself was refused, a `promptFeedback.blockReason` and
+ * no candidates at all. All of these used to arrive at the same place -- the
+ * parse failed, and the teacher was told "Generation did not work this time",
+ * which is true and useless. Three of them have different fixes.
+ */
+function readQuiz(text: string): QuizRead {
+  let body: {
+    candidates?: { finishReason?: string; content?: { parts?: { text?: string }[] } }[];
+    promptFeedback?: { blockReason?: string };
+  };
   try {
-    const body = JSON.parse(text) as {
-      candidates?: { content?: { parts?: { text?: string }[] } }[];
-    };
-    const raw = body.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (typeof raw !== 'string') return null;
-    const parsed = JSON.parse(raw) as { title?: unknown; questions?: unknown };
-    if (!Array.isArray(parsed.questions)) return null;
-    // A missing title is not a failure: the caller has the teacher's topic to
-    // fall back on, and losing a whole quiz over its name would be absurd.
-    const title = typeof parsed.title === 'string' && parsed.title.trim() !== ''
-      ? parsed.title.trim()
-      : null;
-    return { title, questions: parsed.questions };
+    body = JSON.parse(text) as typeof body;
   } catch {
-    return null;
+    return { ok: false, why: 'unreadable', detail: text.slice(0, 500) };
+  }
+
+  // A refused prompt comes back with no candidates whatsoever, so this has to
+  // be read before anything tries to reach into them.
+  const blockReason = body.promptFeedback?.blockReason;
+  if (typeof blockReason === 'string' && blockReason !== '') {
+    return { ok: false, why: 'blocked', detail: `prompt blocked: ${blockReason}` };
+  }
+
+  const candidate = body.candidates?.[0];
+  const finish = candidate?.finishReason;
+  const raw = candidate?.content?.parts?.[0]?.text;
+
+  if (typeof raw !== 'string') {
+    if (finish !== undefined && BLOCKED_FINISHES.has(finish)) {
+      return { ok: false, why: 'blocked', detail: `stopped: ${finish}` };
+    }
+    // Thinking tokens count against the output limit, so a model can spend
+    // the whole allowance before writing a single question.
+    if (finish === 'MAX_TOKENS') {
+      return { ok: false, why: 'truncated', detail: 'no output within the token limit' };
+    }
+    return { ok: false, why: 'unreadable', detail: text.slice(0, 500) };
+  }
+
+  let parsed: { title?: unknown; questions?: unknown };
+  try {
+    parsed = JSON.parse(raw) as typeof parsed;
+  } catch {
+    // JSON that stops mid-object is what a cut-off answer looks like, and the
+    // finish reason is the only thing that distinguishes it from nonsense.
+    if (finish === 'MAX_TOKENS' || finish === 'CONTINUATION') {
+      return { ok: false, why: 'truncated', detail: `cut off after ${raw.length} characters` };
+    }
+    return { ok: false, why: 'unreadable', detail: raw.slice(0, 500) };
+  }
+
+  if (!Array.isArray(parsed.questions)) {
+    if (finish === 'MAX_TOKENS') {
+      return { ok: false, why: 'truncated', detail: 'no questions within the token limit' };
+    }
+    return { ok: false, why: 'unreadable', detail: raw.slice(0, 500) };
+  }
+
+  // A missing title is not a failure: the caller has the teacher's topic to
+  // fall back on, and losing a whole quiz over its name would be absurd.
+  const title = typeof parsed.title === 'string' && parsed.title.trim() !== ''
+    ? parsed.title.trim()
+    : null;
+  return { ok: true, title, questions: parsed.questions };
+}
+
+function failureFor(read: BadRead): GeminiFailure {
+  switch (read.why) {
+    case 'truncated':
+      return { kind: 'truncated', detail: read.detail };
+    case 'blocked':
+      return { kind: 'blocked', detail: read.detail };
+    default:
+      return { kind: 'unreadable', detail: read.detail };
   }
 }
 
-function unavailable(detail: string): GeminiResult {
-  return { ok: false, failure: { kind: 'unavailable', detail } };
+/**
+ * When the first model comes back, or null while any is still worth asking.
+ *
+ * Null is the ordinary case -- something is merely busy. A number means every
+ * model has named a time, and the teacher can be told which kind of "later"
+ * this is instead of being sent to retry for the next fifty minutes.
+ */
+function soonestReturn(models: readonly string[], nowMs: number): number | null {
+  let soonest: number | null = null;
+  for (const model of models) {
+    const until = spentUntil.get(model);
+    if (until === undefined || until <= nowMs) return null;
+    soonest = soonest === null ? until : Math.min(soonest, until);
+  }
+  return soonest === null ? null : soonest - nowMs;
+}
+
+function unavailable(detail: string, retryAfterMs?: number): GeminiResult {
+  const failure: GeminiFailure =
+    retryAfterMs === undefined
+      ? { kind: 'unavailable', detail }
+      : { kind: 'unavailable', detail, retryAfterMs };
+  return { ok: false, failure };
 }
 
 /**
@@ -294,7 +431,10 @@ export async function generateQuiz(call: GeminiCall): Promise<GeminiResult> {
     if (candidates.length === 0) {
       // Every model has told us to come back later and meant it. Asking
       // anyway is the exact waste this is here to stop.
-      return unavailable(`Every model's quota is spent. ${lastDetail}`);
+      return unavailable(
+        `Every model's quota is spent. ${lastDetail}`,
+        soonestReturn(call.models, now()) ?? undefined,
+      );
     }
 
     for (let index = 0; index < candidates.length; index += 1) {
@@ -319,12 +459,7 @@ export async function generateQuiz(call: GeminiCall): Promise<GeminiResult> {
 
         if (status === 200) {
           const quiz = readQuiz(text);
-          if (quiz === null) {
-            return {
-              ok: false,
-              failure: { kind: 'unreadable', detail: text.slice(0, 500) },
-            };
-          }
+          if (!quiz.ok) return { ok: false, failure: failureFor(quiz) };
           return { ok: true, model, title: quiz.title, questions: quiz.questions };
         }
 
@@ -363,7 +498,7 @@ export async function generateQuiz(call: GeminiCall): Promise<GeminiResult> {
     }
   }
 
-  return unavailable(lastDetail);
+  return unavailable(lastDetail, soonestReturn(call.models, now()) ?? undefined);
 }
 
 /**

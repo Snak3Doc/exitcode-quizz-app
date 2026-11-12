@@ -22,6 +22,12 @@ import {
   DEFAULT_MODELS,
   FIRST_BACKOFF_MS,
   MAX_PASSES,
+  MIN_USEFUL_BUDGET_MS,
+  OUT_FOR_THE_DAY_MS,
+  TOTAL_BUDGET_MS,
+  WORKER_SAFETY_MS,
+  WORKER_WALL_CLOCK_MS,
+  budgetWithin,
   forgetSpentQuota,
   generateQuiz,
   retryDelayMs,
@@ -598,6 +604,175 @@ describe('a model whose daily allowance is spent', () => {
 
     expect(result.ok).toBe(true);
     expect(answering).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------- a 200 that is not a quiz ----------
+
+describe('a 200 carrying no usable quiz', () => {
+  beforeEach(() => {
+    forgetSpentQuota();
+  });
+
+  /** One candidate, as the API shapes it. */
+  function candidate(finishReason: string, text?: string) {
+    return JSON.stringify({
+      candidates: [
+        { finishReason, ...(text === undefined ? {} : { content: { parts: [{ text }] } }) },
+      ],
+    });
+  }
+
+  it('calls a refused topic refused, rather than a failure', async () => {
+    // A blocked prompt comes back 200 with no candidates at all. It used to
+    // land on "Generation did not work this time", which is true and useless:
+    // trying again is the one thing that cannot help here.
+    const fetchImpl = vi.fn(async () =>
+      reply(200, JSON.stringify({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } })),
+    );
+
+    const result = await generateQuiz(call(fetchImpl as unknown as typeof fetch));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.kind).toBe('blocked');
+    // And no second model is asked. The topic will not have changed.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls a stopped answer refused too, when the filter named a reason', async () => {
+    const fetchImpl = vi.fn(async () => reply(200, candidate('SAFETY')));
+    const result = await generateQuiz(call(fetchImpl as unknown as typeof fetch));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.kind).toBe('blocked');
+  });
+
+  it('calls an answer that stops mid-JSON cut off, not unreadable', async () => {
+    // What a quiz too long for the token limit actually looks like coming
+    // back. "Ask for fewer questions" is advice; "it did not work" is not.
+    const halfAQuiz = '{"title":"Python dictionaries","questions":[{"type":"mc_sing';
+    const fetchImpl = vi.fn(async () => reply(200, candidate('MAX_TOKENS', halfAQuiz)));
+
+    const result = await generateQuiz(call(fetchImpl as unknown as typeof fetch));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.kind).toBe('truncated');
+  });
+
+  it('calls it cut off even when the limit went on thinking and wrote nothing', async () => {
+    // Thinking tokens count against the output limit, so a model can spend
+    // the whole allowance before writing a single question.
+    const fetchImpl = vi.fn(async () => reply(200, candidate('MAX_TOKENS')));
+    const result = await generateQuiz(call(fetchImpl as unknown as typeof fetch));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.kind).toBe('truncated');
+  });
+
+  it('still calls nonsense unreadable rather than guessing', async () => {
+    const fetchImpl = vi.fn(async () => reply(200, 'not json at all'));
+    const result = await generateQuiz(call(fetchImpl as unknown as typeof fetch));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.kind).toBe('unreadable');
+  });
+
+  it('is not fooled into failing a perfectly good answer', async () => {
+    const good = JSON.stringify({
+      candidates: [
+        {
+          finishReason: 'STOP',
+          content: { parts: [{ text: JSON.stringify({ questions: [{ type: 'true_false' }] }) }] },
+        },
+      ],
+    });
+    const result = await generateQuiz(call(vi.fn(async () => reply(200, good)) as unknown as typeof fetch));
+
+    expect(result.ok).toBe(true);
+  });
+});
+
+// ---------- which kind of "later" ----------
+
+describe('telling a busy minute from a spent day', () => {
+  beforeEach(() => {
+    forgetSpentQuota();
+  });
+
+  const outFor = (delay: string) =>
+    JSON.stringify({ error: { code: 429, details: [{ retryDelay: delay }] } });
+
+  it('says nothing about when, while a model is merely busy', async () => {
+    const fetchImpl = vi.fn(async () => reply(503, 'busy'));
+    const result = await generateQuiz(call(fetchImpl as unknown as typeof fetch));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.failure.kind === 'unavailable') {
+      // Nothing has named a time, so there is nothing to pass on.
+      expect(result.failure.retryAfterMs).toBeUndefined();
+    }
+  });
+
+  it('passes on when the first model comes back, once they all have', async () => {
+    const fetchImpl = vi.fn(async () => reply(429, outOfQuota));
+    const result = await generateQuiz(call(fetchImpl as unknown as typeof fetch, ['a', 'b']));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.failure.kind === 'unavailable') {
+      expect(result.failure.retryAfterMs).toBeGreaterThan(3_160_000);
+      expect(result.failure.retryAfterMs).toBeLessThanOrEqual(3_161_000);
+      // Which is what makes this "come back tomorrow" rather than "in a bit".
+      expect(result.failure.retryAfterMs).toBeGreaterThan(OUT_FOR_THE_DAY_MS);
+    }
+  });
+
+  it('takes the soonest model to return, not the furthest', async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      const model = /models\/([^:]+):/.exec(String(url))?.[1];
+      return reply(429, outFor(model === 'a' ? '3161s' : '30s'));
+    });
+
+    const result = await generateQuiz(call(fetchImpl as unknown as typeof fetch, ['a', 'b']));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.failure.kind === 'unavailable') {
+      expect(result.failure.retryAfterMs).toBeGreaterThan(29_000);
+      expect(result.failure.retryAfterMs).toBeLessThanOrEqual(30_000);
+      // Half a minute is a wait, not a day. The teacher should be told so.
+      expect(result.failure.retryAfterMs).toBeLessThan(OUT_FOR_THE_DAY_MS);
+    }
+  });
+});
+
+// ---------- what is left of the worker ----------
+
+describe('how much of this worker is left to spend', () => {
+  const booted = 1_000_000;
+
+  it('gives a fresh worker the whole budget', () => {
+    expect(budgetWithin(booted, booted)).toBe(TOTAL_BUDGET_MS);
+  });
+
+  it('shrinks as the worker ages, because the wall clock belongs to the worker', () => {
+    // The thing a fixed budget could not know. Supabase lets one worker serve
+    // several requests inside its 150s, so a generation that follows another
+    // one has what is left, not a fresh allowance -- which is why the second
+    // of two back-to-back generations kept dying at 546.
+    expect(budgetWithin(booted, booted + 100_000)).toBe(
+      WORKER_WALL_CLOCK_MS - 100_000 - WORKER_SAFETY_MS,
+    );
+  });
+
+  it('never offers a negative budget', () => {
+    expect(budgetWithin(booted, booted + 200_000)).toBe(0);
+  });
+
+  it('drops below what is worth starting before the worker is actually dead', () => {
+    // The whole point of the safety margin: a window where a generation would
+    // be killed mid-flight, which the caller can refuse to enter.
+    const nearlyDone = booted + WORKER_WALL_CLOCK_MS - WORKER_SAFETY_MS - 5_000;
+    expect(budgetWithin(booted, nearlyDone)).toBeGreaterThan(0);
+    expect(budgetWithin(booted, nearlyDone)).toBeLessThan(MIN_USEFUL_BUDGET_MS);
   });
 });
 
