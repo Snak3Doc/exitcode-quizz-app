@@ -120,8 +120,32 @@ export function budgetWithin(workerStartedAt: number, nowMs: number): number {
   return Math.min(TOTAL_BUDGET_MS, Math.max(0, left));
 }
 
+/**
+ * What the answer cost, for the logs.
+ *
+ * Worth carrying back purely so the next outage is diagnosable. When 3.8 and
+ * 3.7 flash went silent it took a week and a live spike to work out they were
+ * thinking rather than broken; one line of `thoughtTokens` in the function
+ * logs would have said so the first day.
+ */
+export interface GeminiUsage {
+  promptTokens?: number;
+  thoughtTokens?: number;
+  outputTokens?: number;
+  /** What answered, which is not always what was asked for. */
+  modelVersion?: string;
+}
+
 export type GeminiResult =
-  | { ok: true; model: string; title: string | null; questions: unknown[] }
+  | {
+      ok: true;
+      model: string;
+      title: string | null;
+      questions: unknown[];
+      usage: GeminiUsage;
+      /** True when this model refused the thinking level and was asked again without it. */
+      thinkingDropped: boolean;
+    }
   | { ok: false; failure: GeminiFailure };
 
 export interface GeminiCall {
@@ -214,24 +238,59 @@ function realSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * How hard a model should think before writing, or null to leave it alone.
+ *
+ * Gemini 3 models think by default and the default is not small -- 3.8-flash
+ * defaults to MEDIUM. That is almost certainly what "the model accepted the
+ * connection and never answered" was: not a broken model, a model still
+ * thinking when the 60s timeout fired. Thinking tokens also count against the
+ * output limit, so a long think can eat the whole answer.
+ *
+ * A rule rather than a table, so it survives the list changing and the 404
+ * redirect landing somewhere new. The flash-lite models already come back
+ * with zero thinking tokens (measured 2026-11-12), so there is nothing to
+ * turn down and asking would only risk a 400 for no gain.
+ *
+ * LOW rather than MINIMAL on purpose, twice over: MINIMAL is not accepted by
+ * every model -- 3.8-flash answered `Thinking level MINIMAL is not supported
+ * for this model` -- and these questions need some reasoning. "Work out what
+ * this code prints line by line" is the one thing the system prompt insists
+ * on, and a question with the wrong answer marked correct is worse than a
+ * slow one.
+ */
+export function thinkingLevelFor(model: string): string | null {
+  if (model.includes('flash-lite')) return null;
+  if (model.includes('flash')) return 'LOW';
+  return null;
+}
+
 async function callOnce(
   call: GeminiCall,
   model: string,
   doFetch: typeof fetch,
   timeoutMs: number,
+  thinkingLevel: string | null,
 ): Promise<RawResponse> {
   try {
     const response = await doFetch(
-      `${BASE}/models/${model}:generateContent?key=${encodeURIComponent(call.apiKey)}`,
+      `${BASE}/models/${model}:generateContent`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          // The key belongs in a header, not in `?key=`. A query string is
+          // logged by every proxy between here and Google, and the point of
+          // keeping this call on the server was that the key stays secret.
+          'x-goog-api-key': call.apiKey,
+        },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: call.systemPrompt }] },
           contents: [{ role: 'user', parts: [{ text: call.userPrompt }] }],
           generationConfig: {
             responseMimeType: 'application/json',
             responseSchema: call.responseSchema,
+            ...(thinkingLevel === null ? {} : { thinkingConfig: { thinkingLevel } }),
           },
         }),
         signal: AbortSignal.timeout(timeoutMs),
@@ -264,7 +323,9 @@ function sliceFor(timeLeft: number, modelsStillToCome: number): number {
 /** A 200 that is not a usable quiz, and which of the three it is. */
 type BadRead = { ok: false; why: 'truncated' | 'blocked' | 'unreadable'; detail: string };
 
-type QuizRead = { ok: true; title: string | null; questions: unknown[] } | BadRead;
+type QuizRead =
+  | { ok: true; title: string | null; questions: unknown[]; usage: GeminiUsage }
+  | BadRead;
 
 /**
  * Finish reasons that mean the filter stopped it, not that we asked wrongly.
@@ -294,6 +355,12 @@ function readQuiz(text: string): QuizRead {
   let body: {
     candidates?: { finishReason?: string; content?: { parts?: { text?: string }[] } }[];
     promptFeedback?: { blockReason?: string };
+    modelVersion?: string;
+    usageMetadata?: {
+      promptTokenCount?: number;
+      thoughtsTokenCount?: number;
+      candidatesTokenCount?: number;
+    };
   };
   try {
     body = JSON.parse(text) as typeof body;
@@ -348,7 +415,17 @@ function readQuiz(text: string): QuizRead {
   const title = typeof parsed.title === 'string' && parsed.title.trim() !== ''
     ? parsed.title.trim()
     : null;
-  return { ok: true, title, questions: parsed.questions };
+  return {
+    ok: true,
+    title,
+    questions: parsed.questions,
+    usage: {
+      promptTokens: body.usageMetadata?.promptTokenCount,
+      thoughtTokens: body.usageMetadata?.thoughtsTokenCount,
+      outputTokens: body.usageMetadata?.candidatesTokenCount,
+      modelVersion: body.modelVersion,
+    },
+  };
 }
 
 function failureFor(read: BadRead): GeminiFailure {
@@ -439,10 +516,14 @@ export async function generateQuiz(call: GeminiCall): Promise<GeminiResult> {
 
     for (let index = 0; index < candidates.length; index += 1) {
       let model = candidates[index];
+      let thinking = thinkingLevelFor(model);
+      let thinkingDropped = false;
 
-      // Two turns per entry, so a retired model can be followed to the
-      // replacement it names. Not a retry: see the 503 case below.
-      for (let hop = 1; hop <= 2; hop += 1) {
+      // Up to three turns per entry: a retired model can be followed to the
+      // replacement it names, and one that will not take the thinking level
+      // can be asked again without it. Neither is a retry -- see the 503 case
+      // below for why a busy model gets no second go on this pass.
+      for (let hop = 1; hop <= 3; hop += 1) {
         // No model may be given longer than the call has left, and one with
         // nothing left is not worth opening a socket for.
         const timeLeft = deadline - now();
@@ -455,17 +536,41 @@ export async function generateQuiz(call: GeminiCall): Promise<GeminiResult> {
           model,
           doFetch,
           sliceFor(timeLeft, candidates.length - index - 1),
+          thinking,
         );
 
         if (status === 200) {
           const quiz = readQuiz(text);
           if (!quiz.ok) return { ok: false, failure: failureFor(quiz) };
-          return { ok: true, model, title: quiz.title, questions: quiz.questions };
+          return {
+            ok: true,
+            model,
+            title: quiz.title,
+            questions: quiz.questions,
+            usage: quiz.usage,
+            thinkingDropped,
+          };
         }
 
         const suggested = /use models\/([A-Za-z0-9._-]+)/.exec(text)?.[1];
         if (status === 404 && suggested && suggested !== model) {
           model = suggested;
+          // The replacement is a different model and may want a different
+          // level, or none.
+          thinking = thinkingLevelFor(model);
+          continue;
+        }
+
+        // A model that will not take the thinking level says so in a 400, and
+        // that is about this model rather than about the request -- so unlike
+        // every other 400 it must not take the whole generation down with it.
+        // Measured 2026-11-12: 3.8-flash answers `Thinking level MINIMAL is
+        // not supported for this model`. The level we send is not MINIMAL,
+        // but the trap is the same shape whatever Google changes next.
+        if (status === 400 && thinking !== null && /thinking/i.test(text)) {
+          thinking = null;
+          thinkingDropped = true;
+          lastDetail = `${model}: refused thinking level, asked again without it`;
           continue;
         }
 
