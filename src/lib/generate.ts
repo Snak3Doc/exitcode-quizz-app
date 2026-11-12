@@ -50,6 +50,14 @@ function messageForCode(code: string | undefined): string {
   switch (code) {
     case 'quota_exhausted':
       return S.generate.unavailable;
+    case 'out_of_quota_today':
+      return S.generate.outOfQuotaToday;
+    case 'topic_blocked':
+      return S.generate.topicBlocked;
+    case 'too_long':
+      return S.generate.tooLong;
+    case 'server_busy':
+      return S.generate.serverBusy;
     case 'not_approved':
       return S.generate.notApproved;
     case 'server_misconfigured':
