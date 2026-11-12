@@ -1,15 +1,21 @@
 /**
- * Calling Gemini, shaped by what the spike found rather than by the docs.
+ * Calling Gemini, shaped by what measurement found rather than by the docs.
  *
- * Three things cost a failed run each on 2026-11-05 and are handled here:
+ * Four things cost a failed run each and are handled here:
  *
  *  - A **retired model stays in the models list** and 404s only when called,
  *    naming its replacement in the error. `supportedGenerationMethods` is not
  *    enough to pick one.
- *  - The **newest free models are congested**: 3.8, 3.7 and 3.6 flash all
- *    returned 503 while 3.5-flash answered. One model is not enough; a list is.
+ *  - **Free-tier models are congested**, and transiently: on 2026-11-12 every
+ *    model in the list returned 503 within six seconds of each other, and two
+ *    of them answered fine moments later. One model is not enough; a list is,
+ *    and so is asking again.
  *  - An **overloaded model accepts the connection and then goes quiet**, which
  *    without an explicit timeout surfaces minutes later as an unhandled error.
+ *  - **The good models are rationed by the day, not the minute.** See
+ *    `DEFAULT_MODELS` and `spentUntil` below. This is the one that made
+ *    generation flaky for a week, and it is invisible until you read a 429's
+ *    own error body.
  *
  * `fetch` is injected so this can be tested without the network. Nothing here
  * imports anything or touches a Deno global, so vitest can read it.
@@ -52,6 +58,23 @@ export const TOTAL_BUDGET_MS = 70_000;
  */
 export const MIN_MODEL_SLICE_MS = 12_000;
 
+/**
+ * How many times the whole list is walked, counting the first.
+ *
+ * Giving up after one pass threw away most of the budget. Measured on
+ * 2026-11-12: the list was walked in about ten seconds, every model said 503,
+ * the teacher was told to try later -- and the same call four seconds later
+ * succeeded. Sixty of seventy seconds went unused.
+ *
+ * Bounded rather than budget-driven because this tier is rationed in requests
+ * per day. An unbounded loop inside a 70s budget is a way to spend a whole
+ * day's allowance on one quiz that was never going to work.
+ */
+export const MAX_PASSES = 3;
+
+/** The wait before the second pass. Doubled for each pass after it. */
+export const FIRST_BACKOFF_MS = 1_500;
+
 /** Why a generation attempt ended, in terms the caller can act on. */
 export type GeminiFailure =
   /** Busy, rate limited, or out of quota. The teacher is told to try later. */
@@ -67,7 +90,7 @@ export type GeminiResult =
 
 export interface GeminiCall {
   apiKey: string;
-  /** Models to try, newest first. */
+  /** Models to try, cheapest-and-quickest first. */
   models: readonly string[];
   systemPrompt: string;
   userPrompt: string;
@@ -75,6 +98,8 @@ export interface GeminiCall {
   fetchImpl?: typeof fetch;
   /** Injected in tests so the budget can run out without the clock moving. */
   nowImpl?: () => number;
+  /** Injected in tests so backoff costs no real time. */
+  sleepImpl?: (ms: number) => Promise<void>;
   /** Defaults to TOTAL_BUDGET_MS. */
   budgetMs?: number;
 }
@@ -82,6 +107,75 @@ export interface GeminiCall {
 interface RawResponse {
   status: number;
   text: string;
+}
+
+/**
+ * Models whose quota is spent, and the moment each is worth asking again.
+ *
+ * Module scope on purpose: a Supabase worker serves several requests over its
+ * life, so this is remembered from one generation to the next without a table,
+ * a migration or a read on the hot path. A recycled worker forgets, which
+ * costs one wasted request and no correctness.
+ *
+ * It matters because the ration is daily. When 3.6-flash says "retry in
+ * 3161s", every request that asks it again before then is spent for nothing --
+ * and before this existed, that was every generation for the rest of the day.
+ */
+const spentUntil = new Map<string, number>();
+
+/** For tests, which would otherwise leak one case's quota state into the next. */
+export function forgetSpentQuota(): void {
+  spentUntil.clear();
+}
+
+function isSpent(model: string, nowMs: number): boolean {
+  const until = spentUntil.get(model);
+  if (until === undefined) return false;
+  if (until <= nowMs) {
+    spentUntil.delete(model);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * How long Google says to wait, from the 429's own RetryInfo.
+ *
+ * Worth reading rather than guessing: the same status covers "you are going a
+ * bit fast" and "that is your twenty for today", and the only thing that tells
+ * them apart is this number. Measured 2026-11-12: a per-day violation on
+ * 3.6-flash came back as `"retryDelay": "3161s"`.
+ */
+export function retryDelayMs(text: string): number | null {
+  try {
+    const body = JSON.parse(text) as {
+      error?: { details?: { retryDelay?: unknown }[] };
+    };
+    for (const detail of body.error?.details ?? []) {
+      if (typeof detail.retryDelay !== 'string') continue;
+      const seconds = /^([0-9]+(?:\.[0-9]+)?)s$/.exec(detail.retryDelay);
+      if (seconds) return Math.round(Number(seconds[1]) * 1_000);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The wait before a pass, jittered.
+ *
+ * The jitter is not decoration. Without it every teacher whose generation hit
+ * the same overloaded model comes back in lockstep, which is the pile-up
+ * backoff exists to break up.
+ */
+function backoffFor(pass: number, random: () => number): number {
+  const base = FIRST_BACKOFF_MS * 2 ** (pass - 1);
+  return Math.round(base * (0.75 + random() * 0.5));
+}
+
+function realSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function callOnce(
@@ -152,103 +246,162 @@ function readQuiz(text: string): { title: string | null; questions: unknown[] } 
   }
 }
 
+function unavailable(detail: string): GeminiResult {
+  return { ok: false, failure: { kind: 'unavailable', detail } };
+}
+
 /**
- * Ask for a quiz, trying each model in turn.
+ * Ask for a quiz, trying each model in turn and then trying again.
  *
- * A model that is busy gets one retry and then we move down the list; a model
- * that is retired is swapped for the replacement it names. Anything else is
- * returned straight away, because it says something about the request rather
- * than about the weather.
+ * One pass down the list, each model getting a single go -- a model that has
+ * just said it is overloaded is a worse bet than one that has not been asked.
+ * Then, if the budget allows, the whole list again after a jittered backoff,
+ * because a 503 on this tier clears in seconds.
+ *
+ * Skipped on every pass: any model whose own 429 told us when to come back and
+ * that moment has not arrived. A retired model is swapped for the replacement
+ * it names. A 400 is returned straight away, because it says something about
+ * the request rather than about the weather, and no other model will like it
+ * any better.
  *
  * The whole walk shares one budget. Whatever the models do, this answers.
  */
 export async function generateQuiz(call: GeminiCall): Promise<GeminiResult> {
   const doFetch = call.fetchImpl ?? fetch;
   const now = call.nowImpl ?? Date.now;
+  const sleep = call.sleepImpl ?? realSleep;
 
   if (call.models.length === 0) {
-    return { ok: false, failure: { kind: 'unavailable', detail: 'No models configured.' } };
+    return unavailable('No models configured.');
   }
 
   const deadline = now() + (call.budgetMs ?? TOTAL_BUDGET_MS);
   let lastDetail = 'No model answered.';
 
-  for (let index = 0; index < call.models.length; index += 1) {
-    let model = call.models[index];
+  for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
+    if (pass > 1) {
+      // Another pass is only worth making if, after the wait, a model would
+      // get a real slice rather than a socket that closes before it can
+      // answer. Checking only that the sleep itself fits is not enough: it
+      // leaves just enough budget to open a connection and abandon it, which
+      // spends a request to learn nothing.
+      const wait = backoffFor(pass - 1, Math.random);
+      if (now() + wait + MIN_MODEL_SLICE_MS >= deadline) break;
+      await sleep(wait);
+    }
 
-    // Two turns per entry, so a retired model can be followed to the
-    // replacement it names. Not a retry: see the 503 case below.
-    for (let hop = 1; hop <= 2; hop += 1) {
-      // No model may be given longer than the call has left, and one with
-      // nothing left is not worth opening a socket for.
-      const timeLeft = deadline - now();
-      if (timeLeft <= 0) {
-        return {
-          ok: false,
-          failure: { kind: 'unavailable', detail: `Ran out of time. ${lastDetail}` },
-        };
-      }
+    const candidates = call.models.filter((model) => !isSpent(model, now()));
+    if (candidates.length === 0) {
+      // Every model has told us to come back later and meant it. Asking
+      // anyway is the exact waste this is here to stop.
+      return unavailable(`Every model's quota is spent. ${lastDetail}`);
+    }
 
-      const { status, text } = await callOnce(
-        call,
-        model,
-        doFetch,
-        sliceFor(timeLeft, call.models.length - index - 1),
-      );
+    for (let index = 0; index < candidates.length; index += 1) {
+      let model = candidates[index];
 
-      if (status === 200) {
-        const quiz = readQuiz(text);
-        if (quiz === null) {
-          return {
-            ok: false,
-            failure: { kind: 'unreadable', detail: text.slice(0, 500) },
-          };
+      // Two turns per entry, so a retired model can be followed to the
+      // replacement it names. Not a retry: see the 503 case below.
+      for (let hop = 1; hop <= 2; hop += 1) {
+        // No model may be given longer than the call has left, and one with
+        // nothing left is not worth opening a socket for.
+        const timeLeft = deadline - now();
+        if (timeLeft <= 0) {
+          return unavailable(`Ran out of time. ${lastDetail}`);
         }
-        return { ok: true, model, title: quiz.title, questions: quiz.questions };
-      }
 
-      const suggested = /use models\/([A-Za-z0-9._-]+)/.exec(text)?.[1];
-      if (status === 404 && suggested && suggested !== model) {
-        model = suggested;
-        continue;
-      }
+        const { status, text } = await callOnce(
+          call,
+          model,
+          doFetch,
+          sliceFor(timeLeft, candidates.length - index - 1),
+        );
 
-      if (status === 503 || status === 429 || status === 500) {
-        // Straight on to the next model, with no second go at this one. A
-        // model that has just said it is overloaded is a worse bet than one
-        // that has not been asked, and the budget only stretches so far.
-        lastDetail = `${model}: ${status}`;
-        break;
-      }
+        if (status === 200) {
+          const quiz = readQuiz(text);
+          if (quiz === null) {
+            return {
+              ok: false,
+              failure: { kind: 'unreadable', detail: text.slice(0, 500) },
+            };
+          }
+          return { ok: true, model, title: quiz.title, questions: quiz.questions };
+        }
 
-      // 400 and friends: the request is wrong, and trying another model with
-      // the same request would only waste more of the day's quota.
-      return { ok: false, failure: { kind: 'rejected', status, detail: text.slice(0, 500) } };
+        const suggested = /use models\/([A-Za-z0-9._-]+)/.exec(text)?.[1];
+        if (status === 404 && suggested && suggested !== model) {
+          model = suggested;
+          continue;
+        }
+
+        if (status === 429) {
+          // The one status that carries its own answer. Believe it: a model
+          // that says 3161 seconds will say it again, and every one of those
+          // requests is gone from the day's allowance for nothing.
+          const delay = retryDelayMs(text);
+          if (delay !== null) {
+            spentUntil.set(model, now() + delay);
+            lastDetail = `${model}: 429, out for ${Math.round(delay / 1_000)}s`;
+          } else {
+            lastDetail = `${model}: 429`;
+          }
+          break;
+        }
+
+        if (status === 503 || status === 500) {
+          // Straight on to the next model, with no second go at this one on
+          // this pass. The next pass is where it gets asked again, by which
+          // time a spike has usually passed.
+          lastDetail = `${model}: ${status}`;
+          break;
+        }
+
+        // 400 and friends: the request is wrong, and trying another model with
+        // the same request would only waste more of the day's quota.
+        return { ok: false, failure: { kind: 'rejected', status, detail: text.slice(0, 500) } };
+      }
     }
   }
 
-  return { ok: false, failure: { kind: 'unavailable', detail: lastDetail } };
+  return unavailable(lastDetail);
 }
 
 /**
- * The models to try, newest first.
+ * The models to try, cheapest and quickest first.
  *
  * Asking the API which models exist sounds better than a list, and is not: the
  * list includes retired models, and the newest are the most congested. A
- * hard-coded order that ends somewhere old and quiet is more reliable, and
- * `generateQuiz` follows Google's redirect if one of these retires.
+ * hard-coded order is more reliable, and `generateQuiz` follows Google's
+ * redirect if one of these retires.
  *
- * 3.8-flash and 3.7-flash were at the head of this list and are gone from it.
- * They are still in the API's own model list and still take a connection, but
- * on 2026-11-10 neither sent a byte back -- not a 503, nothing -- so every
- * generation died on the first entry. Measured with a real ten-question quiz
- * that day: 3.6-flash 39s, 3.5-flash 28s, 3.5-flash-lite 8s.
+ * The order here is by **daily allowance**, not by capability, and that is the
+ * fix for a week of flaky generation. Measured 2026-11-12, from the 429's own
+ * error body: `gemini-3.6-flash` is capped at twenty requests per day on the
+ * free tier (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`, quotaValue
+ * 20). It used to be first, so every quiz spent one of those twenty before
+ * reaching a model that answers -- and a quiz costs more than one request,
+ * because the repair pass and every "regenerate this question" start the walk
+ * again. Once the twenty were gone, every generation for the rest of the day
+ * wasted a guaranteed-429 request on it first.
+ *
+ * Both flash-lite models returned a valid ten-question quiz in 4.5s and 5.6s
+ * with zero thinking tokens, and their allowance runs to the hundreds. So they
+ * lead, and 3.6-flash is the reserve rather than the default.
+ *
+ * Worth being honest about: no one has compared the *quality* of the questions
+ * these write against 3.6-flash. If generated questions get noticeably worse,
+ * this order is the first thing to revisit, and that comparison is the thing
+ * to do before changing it back.
+ *
+ * 3.8-flash and 3.7-flash are deliberately absent. They take a connection and
+ * never answer within 60s, which is almost certainly default thinking -- 3.8
+ * defaults to MEDIUM -- rather than the models being broken.
  *
  * If generation starts failing again, this list is the first thing to check:
  * call each one and see what answers. `scripts/try-generation.ts` does it.
  */
 export const DEFAULT_MODELS = [
-  'gemini-3.6-flash',
-  'gemini-3.5-flash',
   'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-3.6-flash',
 ] as const;

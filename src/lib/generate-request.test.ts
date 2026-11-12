@@ -8,7 +8,7 @@
  * `src/` drifting away from the one that actually runs.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QUESTION_TYPES } from './types';
 import {
   MAX_QUESTIONS_PER_REQUEST,
@@ -20,7 +20,11 @@ import { buildRepairPrompt, buildSystemPrompt, buildUserPrompt } from '../../sup
 import { quizSchemaFor } from '../../supabase/functions/generate-quiz/schema';
 import {
   DEFAULT_MODELS,
+  FIRST_BACKOFF_MS,
+  MAX_PASSES,
+  forgetSpentQuota,
   generateQuiz,
+  retryDelayMs,
   type GeminiCall,
 } from '../../supabase/functions/generate-quiz/gemini';
 
@@ -152,10 +156,35 @@ function call(fetchImpl: typeof fetch, models = ['a', 'b']): GeminiCall {
     userPrompt: 'user',
     responseSchema: {},
     fetchImpl,
+    // Backoff is real time, and a suite that waits for it is a suite nobody
+    // runs. Cases that care about the waits pass their own.
+    sleepImpl: async () => {},
   };
 }
 
+/** A clock we move by hand, so a budget can run out instantly. */
+function clock(start = 1_000_000) {
+  let value = start;
+  return {
+    now: () => value,
+    advance: (ms: number) => {
+      value += ms;
+    },
+  };
+}
+
+/** Which models were actually asked, in order, read off the URLs. */
+function modelsAsked(fetchImpl: { mock: { calls: unknown[][] } }): string[] {
+  return fetchImpl.mock.calls.map(([url]) => /models\/([^:]+):/.exec(String(url))?.[1] ?? '?');
+}
+
 describe('calling Gemini', () => {
+  // The worker remembers which models are out of quota, which is the point of
+  // it. Across tests that would be one case deciding another's outcome.
+  beforeEach(() => {
+    forgetSpentQuota();
+  });
+
   it('returns the questions when a model answers', async () => {
     const fetchImpl = vi.fn(async () => reply(200, successBody([{ type: 'true_false' }])));
     const result = await generateQuiz(call(fetchImpl as unknown as typeof fetch));
@@ -171,9 +200,11 @@ describe('calling Gemini', () => {
     // The spike found 3.8, 3.7 and 3.6 flash all returning 503 while an older
     // one answered, so this is the normal case rather than an edge case.
     //
-    // No second go at the busy one: a model that has just said it is
-    // overloaded is a worse bet than one that has not been asked, and asking
-    // twice is how the budget ran out before the quick model got its turn.
+    // No second go at the busy one on this pass: a model that has just said
+    // it is overloaded is a worse bet than one that has not been asked, and
+    // asking twice is how the budget ran out before the quick model got its
+    // turn. It does get asked again on the next pass, once a backoff has
+    // given the spike time to clear.
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(reply(503, 'busy'))
@@ -199,15 +230,19 @@ describe('calling Gemini', () => {
     if (result.ok) expect(result.model).toBe('new-one');
   });
 
-  it('reports unavailable when every model is busy', async () => {
+  it('reports unavailable when every model is busy on every pass', async () => {
     const fetchImpl = vi.fn(async () => reply(503, 'busy'));
     const result = await generateQuiz(call(fetchImpl as unknown as typeof fetch));
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.failure.kind).toBe('unavailable');
+    // Two models, every pass, before anyone is told to try later.
+    expect(fetchImpl).toHaveBeenCalledTimes(2 * MAX_PASSES);
   });
 
   it('treats being rate limited the same as being busy', async () => {
+    // A 429 with no RetryInfo to read. Nothing is known about when it is
+    // worth asking again, so it is treated as a spike like any other.
     const fetchImpl = vi.fn(async () => reply(429, 'slow down'));
     const result = await generateQuiz(call(fetchImpl as unknown as typeof fetch));
 
@@ -254,16 +289,9 @@ describe('calling Gemini', () => {
 // ---------- the budget ----------
 
 describe('the time the whole call is allowed', () => {
-  /** A clock we move by hand, so a budget can run out instantly. */
-  function clock(start = 1_000_000) {
-    let value = start;
-    return {
-      now: () => value,
-      advance: (ms: number) => {
-        value += ms;
-      },
-    };
-  }
+  beforeEach(() => {
+    forgetSpentQuota();
+  });
 
   it('gives every model a turn even when the ones before it are slow', async () => {
     // Found live: ordered best-first, the strongest model took the budget
@@ -377,6 +405,226 @@ describe('the time the whole call is allowed', () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+});
+
+// ---------- asking again ----------
+
+describe('asking again after a spike', () => {
+  beforeEach(() => {
+    forgetSpentQuota();
+  });
+
+  it('walks the list again rather than giving up with the budget unspent', async () => {
+    // Measured 2026-11-12: every model in the list returned 503 within six
+    // seconds of each other, and the same call four seconds later worked.
+    // Giving up after one pass threw away sixty of the seventy seconds.
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(reply(503, 'busy'))
+      .mockResolvedValueOnce(reply(503, 'busy'))
+      .mockResolvedValueOnce(reply(200, successBody([{ type: 'true_false' }])));
+
+    const result = await generateQuiz(call(fetchImpl as unknown as typeof fetch));
+
+    expect(result.ok).toBe(true);
+    // Back to the top of the list, so the quickest model is tried first again.
+    if (result.ok) expect(result.model).toBe('a');
+    expect(modelsAsked(fetchImpl)).toEqual(['a', 'b', 'a']);
+  });
+
+  it('waits longer before each pass, and never exactly as long as last time', async () => {
+    const waits: number[] = [];
+    const fetchImpl = vi.fn(async () => reply(503, 'busy'));
+
+    await generateQuiz({
+      ...call(fetchImpl as unknown as typeof fetch),
+      sleepImpl: async (ms) => {
+        waits.push(ms);
+      },
+    });
+
+    expect(waits).toHaveLength(MAX_PASSES - 1);
+    // Jittered by a quarter either way, so two teachers who hit the same
+    // overloaded model do not come back in lockstep.
+    expect(waits[0]).toBeGreaterThanOrEqual(FIRST_BACKOFF_MS * 0.75);
+    expect(waits[0]).toBeLessThanOrEqual(FIRST_BACKOFF_MS * 1.25);
+    // Doubling outruns the jitter, so the second wait is always the longer.
+    expect(waits[1]).toBeGreaterThan(waits[0]);
+  });
+
+  it('does not sleep away a budget it cannot make another pass with', async () => {
+    const time = clock();
+    const fetchImpl = vi.fn(async () => {
+      time.advance(34_000);
+      return reply(503, 'busy');
+    });
+    const waits: number[] = [];
+
+    await generateQuiz({
+      ...call(fetchImpl as unknown as typeof fetch),
+      nowImpl: time.now,
+      sleepImpl: async (ms) => {
+        waits.push(ms);
+        time.advance(ms);
+      },
+      budgetMs: 70_000,
+    });
+
+    // Two models at 34s each leaves 2s: not worth sleeping, let alone asking.
+    expect(waits).toHaveLength(0);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------- the daily ration ----------
+
+/**
+ * What a spent daily allowance actually looks like, captured verbatim from
+ * gemini-3.6-flash on 2026-11-12. The retryDelay is the whole point: it is the
+ * only thing that tells "you are going a bit fast" from "that is your twenty
+ * for today".
+ */
+const outOfQuota = JSON.stringify({
+  error: {
+    code: 429,
+    message: 'You exceeded your current quota. Please retry in 52m41.274708854s.',
+    status: 'RESOURCE_EXHAUSTED',
+    details: [
+      {
+        '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+        violations: [
+          {
+            quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier',
+            quotaValue: '20',
+          },
+        ],
+      },
+      { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '3161s' },
+    ],
+  },
+});
+
+describe('reading how long Google says to wait', () => {
+  it('takes the delay out of RetryInfo', () => {
+    expect(retryDelayMs(outOfQuota)).toBe(3_161_000);
+  });
+
+  it('keeps the fraction of a second rather than rounding it away', () => {
+    const body = JSON.stringify({ error: { details: [{ retryDelay: '1.5s' }] } });
+    expect(retryDelayMs(body)).toBe(1_500);
+  });
+
+  it('says nothing when the 429 carried no RetryInfo', () => {
+    expect(retryDelayMs(JSON.stringify({ error: { code: 429 } }))).toBeNull();
+  });
+
+  it('survives a body that is not JSON at all', () => {
+    expect(retryDelayMs('slow down')).toBeNull();
+  });
+});
+
+describe('a model whose daily allowance is spent', () => {
+  beforeEach(() => {
+    forgetSpentQuota();
+  });
+
+  function answers(status: number, body: string) {
+    return async (url: string) => {
+      const model = /models\/([^:]+):/.exec(String(url))?.[1];
+      return model === 'scarce' ? reply(status, body) : reply(200, successBody([{ type: 'true_false' }]));
+    };
+  }
+
+  it('is passed over on later passes in the same call', async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      const model = /models\/([^:]+):/.exec(String(url))?.[1];
+      return model === 'scarce' ? reply(429, outOfQuota) : reply(503, 'busy');
+    });
+
+    await generateQuiz(call(fetchImpl as unknown as typeof fetch, ['scarce', 'plenty']));
+
+    // Asked once, told to come back in nearly an hour, and believed.
+    expect(modelsAsked(fetchImpl)).toEqual(['scarce', 'plenty', 'plenty', 'plenty']);
+  });
+
+  it('is passed over by the next request the same worker serves', async () => {
+    // The whole reason this is remembered at module scope. Before it was,
+    // every generation for the rest of the day opened with a request that
+    // could only ever come back 429.
+    const first = vi.fn(answers(429, outOfQuota));
+    await generateQuiz(call(first as unknown as typeof fetch, ['scarce']));
+    expect(modelsAsked(first)).toEqual(['scarce']);
+
+    const second = vi.fn(answers(429, outOfQuota));
+    const result = await generateQuiz(call(second as unknown as typeof fetch, ['scarce', 'plenty']));
+
+    expect(result.ok).toBe(true);
+    expect(modelsAsked(second)).toEqual(['plenty']);
+  });
+
+  it('answers without spending a request when every model is spent', async () => {
+    const fetchImpl = vi.fn(async () => reply(429, outOfQuota));
+    await generateQuiz(call(fetchImpl as unknown as typeof fetch, ['a', 'b']));
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+
+    const again = vi.fn(async () => reply(429, outOfQuota));
+    const result = await generateQuiz(call(again as unknown as typeof fetch, ['a', 'b']));
+
+    expect(again).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.kind).toBe('unavailable');
+      expect(result.failure.detail).toMatch(/quota is spent/i);
+    }
+  });
+
+  it('is asked again once the moment Google named has passed', async () => {
+    const time = clock();
+    const refusing = vi.fn(async () => reply(429, outOfQuota));
+    await generateQuiz({
+      ...call(refusing as unknown as typeof fetch, ['scarce']),
+      nowImpl: time.now,
+    });
+    expect(refusing).toHaveBeenCalledTimes(1);
+
+    // The ration resets, and so does this. Nothing has to clear it by hand.
+    time.advance(3_161_001);
+    const answering = vi.fn(async () => reply(200, successBody([{ type: 'true_false' }])));
+    const result = await generateQuiz({
+      ...call(answering as unknown as typeof fetch, ['scarce']),
+      nowImpl: time.now,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(answering).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------- the order of the list ----------
+
+describe('which model is asked first', () => {
+  it('leads with the models that are rationed by the hundred, not the twenty', async () => {
+    // Measured 2026-11-12 from the 429's own body: gemini-3.6-flash is capped
+    // at twenty requests per day on the free tier. It used to be first, so
+    // every quiz spent one of those twenty before reaching a model that
+    // answers -- and once they were gone, every generation wasted a
+    // guaranteed-429 request on it.
+    expect(DEFAULT_MODELS[0]).toBe('gemini-3.5-flash-lite');
+    expect(DEFAULT_MODELS[DEFAULT_MODELS.length - 1]).toBe('gemini-3.6-flash');
+  });
+
+  it('keeps the two models that answer in seconds ahead of the scarce one', async () => {
+    const scarce = DEFAULT_MODELS.indexOf('gemini-3.6-flash');
+    expect(DEFAULT_MODELS.indexOf('gemini-3.5-flash-lite')).toBeLessThan(scarce);
+    expect(DEFAULT_MODELS.indexOf('gemini-3.1-flash-lite')).toBeLessThan(scarce);
+  });
+
+  it('leaves out the models that take a connection and never answer', async () => {
+    // 3.8-flash defaults to MEDIUM thinking and does not finish inside the
+    // request timeout. Not broken -- thinking. Still no use here.
+    expect(DEFAULT_MODELS).not.toContain('gemini-3.8-flash');
+    expect(DEFAULT_MODELS).not.toContain('gemini-3.7-flash');
   });
 });
 
